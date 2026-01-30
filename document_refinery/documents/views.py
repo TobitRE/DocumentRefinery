@@ -3,15 +3,16 @@ import os
 
 from django.conf import settings
 from django.utils import timezone
+from django.http import FileResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.response import Response
 
 from authn.permissions import HasScope
 from authn.permissions import APIKeyRequired
 
-from .models import Document, IngestionJob, IngestionJobStatus, IngestionStage
+from .models import Artifact, Document, IngestionJob, IngestionJobStatus, IngestionStage
 from .tasks import start_ingestion_pipeline
-from .serializers import DocumentSerializer, DocumentUploadSerializer
+from .serializers import ArtifactSerializer, DocumentSerializer, DocumentUploadSerializer
 
 
 class DocumentViewSet(
@@ -116,5 +117,52 @@ class DocumentViewSet(
         if job_id:
             payload["job_id"] = job_id
         return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class ArtifactViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Artifact.objects.all()
+    serializer_class = ArtifactSerializer
+    permission_classes = [APIKeyRequired, HasScope]
+
+    def get_permissions(self):
+        self.required_scopes = ["artifacts:read"]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        api_key = self.request.auth
+        queryset = Artifact.objects.filter(tenant=api_key.tenant).order_by("-created_at")
+        job_id = self.request.query_params.get("job_id")
+        if job_id:
+            queryset = queryset.filter(job_id=job_id)
+        return queryset
+
+    def retrieve(self, request, *args, **kwargs):
+        artifact = self.get_object()
+        api_key = request.auth
+        if artifact.tenant_id != api_key.tenant_id:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        relpath = artifact.storage_relpath
+        abs_path = os.path.join(settings.DATA_ROOT, relpath)
+
+        if settings.X_ACCEL_REDIRECT_ENABLED:
+            response = Response()
+            response["X-Accel-Redirect"] = os.path.join(
+                settings.X_ACCEL_REDIRECT_LOCATION, relpath
+            )
+            response["Content-Type"] = artifact.content_type or "application/octet-stream"
+            response["Content-Disposition"] = f'attachment; filename="{artifact.kind}"'
+            return response
+
+        return FileResponse(
+            open(abs_path, "rb"),
+            as_attachment=True,
+            filename=artifact.kind,
+            content_type=artifact.content_type or "application/octet-stream",
+        )
 
 # Create your views here.

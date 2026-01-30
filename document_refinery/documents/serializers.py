@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Document
+from .models import Artifact, Document
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -23,3 +23,18 @@ class DocumentUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
     ingest = serializers.BooleanField(required=False, default=False)
     options_json = serializers.JSONField(required=False)
+
+
+class ArtifactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Artifact
+        fields = (
+            "id",
+            "kind",
+            "job_id",
+            "storage_relpath",
+            "checksum_sha256",
+            "size_bytes",
+            "content_type",
+            "created_at",
+        )
