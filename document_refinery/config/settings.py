@@ -10,8 +10,8 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
-from pathlib import Path
 import os
+from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -32,6 +32,15 @@ DATA_ROOT = os.environ.get("DATA_ROOT", "/var/lib/docling_service")
 UPLOAD_MAX_SIZE_MB = int(os.environ.get("UPLOAD_MAX_SIZE_MB", "50"))
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "0"))
 DOC_DEFAULT_OPTIONS = {}
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "")
+CELERY_TASK_TIME_LIMIT = int(os.environ.get("CELERY_TASK_TIME_LIMIT", "1800"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.environ.get("CELERY_TASK_SOFT_TIME_LIMIT", "1500"))
+CELERY_TASK_ACKS_LATE = True
+
+CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "127.0.0.1")
+CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
 
 
 # Application definition

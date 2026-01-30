@@ -2,6 +2,7 @@ import hashlib
 import os
 
 from django.conf import settings
+from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.response import Response
 
@@ -9,6 +10,7 @@ from authn.permissions import HasScope
 from authn.permissions import APIKeyRequired
 
 from .models import Document, IngestionJob, IngestionJobStatus, IngestionStage
+from .tasks import start_ingestion_pipeline
 from .serializers import DocumentSerializer, DocumentUploadSerializer
 
 
@@ -97,15 +99,18 @@ class DocumentViewSet(
 
         job_id = None
         if ingest:
+            options_json = options_json or api_key.docling_options_json or {}
             job = IngestionJob.objects.create(
                 tenant=api_key.tenant,
                 created_by_key=api_key,
                 document=doc,
                 status=IngestionJobStatus.QUEUED,
                 stage=IngestionStage.SCANNING,
+                queued_at=timezone.now(),
                 options_json=options_json or {},
             )
             job_id = job.id
+            start_ingestion_pipeline(job_id)
 
         payload = DocumentSerializer(doc).data
         if job_id:
