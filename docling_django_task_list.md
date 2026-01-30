@@ -14,6 +14,33 @@ This document is a **workable implementation task list** for a Django system tha
 
 ---
 
+## 0) Product scope & API contract (define first)
+
+### 0.1 MVP scope (v0)
+- [ ] Decide v0 scope explicitly (recommended minimal):
+  - [ ] Upload PDF -> scan -> docling convert -> export artifacts -> download
+  - [ ] Admin-only UI (dashboard included in v0)
+  - [ ] Chunking deferred (v1)
+- [ ] Define non-goals (defer to v1):
+  - [ ] Multi-region / object storage
+  - [ ] Advanced analytics or billing
+
+### 0.2 Service limits & SLOs
+- [ ] Define max upload size (50 MB) and max pages (hard caps)
+- [ ] Define timeouts per stage (scan/convert/export)
+- [ ] Define retention defaults (artifacts, logs, quarantines)
+- [ ] Define target throughput and latency (SLOs)
+
+### 0.3 API contract
+- [ ] Draft OpenAPI spec (paths + schemas + errors)
+- [ ] Standardize error format:
+  - [ ] `error_code`, `message`, `details`
+  - [ ] `request_id`
+- [ ] Pagination & ordering rules for list endpoints
+- [ ] Example requests/responses for uploads, jobs, artifacts
+
+---
+
 ## 1) High-level architecture decisions (record once)
 
 - [ ] **Local FS layout** (example, adjust to your server policy):
@@ -31,10 +58,9 @@ This document is a **workable implementation task list** for a Django system tha
   - [ ] Ensure Gunicorn + Celery run under same user/group or shared group with controlled umask
   - [ ] Nginx should not need direct write access
 - [ ] **Broker/backend** for Celery:
-  - [ ] Choose Redis or RabbitMQ (Redis is simpler for MVP)
+  - [ ] Redis (selected)
 - [ ] **Artifact delivery strategy**:
-  - [ ] Option A (simple): Django streams artifact files
-  - [ ] Option B (recommended): Nginx `X-Accel-Redirect` for efficient file downloads (Django authorizes; Nginx serves)
+  - [ ] Nginx `X-Accel-Redirect` (selected)
 
 ---
 
@@ -49,12 +75,19 @@ This document is a **workable implementation task list** for a Django system tha
 - [ ] Settings:
   - [ ] `.env` support (e.g., `django-environ`)
   - [ ] Separate `settings/dev.py`, `settings/prod.py`
-  - [ ] `DATA_ROOT`, `UPLOAD_MAX_SIZE_MB`, `MAX_PAGES`, `DOC_DEFAULT_OPTIONS`
+  - [ ] `DATA_ROOT` set via `.env` (default `/var/lib/docling_service`)
+  - [ ] `UPLOAD_MAX_SIZE_MB` (50), `MAX_PAGES`, `DOC_DEFAULT_OPTIONS`
   - [ ] Logging configuration (JSON logs recommended)
   - [ ] CORS policy (if dashboard UI is separate)
 - [ ] Pin dependencies (Docling version pinned; reproducibility).
 
-### 2.2 Celery integration
+### 2.2 Dev/CI scaffolding
+- [ ] `README.md` with quickstart (local run, env vars, sample curl)
+- [ ] `.env.example` with all required variables
+- [ ] `docker-compose.yml` (optional but helpful for Redis/ClamAV)
+- [ ] CI pipeline (tests + lint + type checks)
+
+### 2.3 Celery integration
 - [ ] Add Celery app (e.g., `config/celery.py`) and configure:
   - [ ] `CELERY_BROKER_URL`
   - [ ] `CELERY_RESULT_BACKEND` (or disable results; store status in DB)
@@ -71,7 +104,7 @@ This document is a **workable implementation task list** for a Django system tha
   - [ ] `finalize_job_task`
 - [ ] Add Celery Beat only if scheduled tasks needed (cleanup/retention).
 
-### 2.3 Process manager (systemd)
+### 2.4 Process manager (systemd)
 - [ ] Systemd units:
   - [ ] `gunicorn.service`
   - [ ] `celery-worker.service`
@@ -80,7 +113,7 @@ This document is a **workable implementation task list** for a Django system tha
   - [ ] `clamav-daemon.service` (`clamd`)
 - [ ] Ensure consistent environment variables for all services.
 
-### 2.4 Nginx reverse proxy
+### 2.5 Nginx reverse proxy
 - [ ] Nginx site config:
   - [ ] Proxy to Gunicorn socket/port
   - [ ] Request size limits matching upload constraints
@@ -106,13 +139,27 @@ This document is a **workable implementation task list** for a Django system tha
   - [ ] `documents:write`, `documents:read`, `jobs:read`, `artifacts:read`, `dashboard:read`
 - [ ] Add rate limiting per key (DRF throttling):
   - [ ] burst + sustained limits
+  - [ ] scope-based throttles (optional)
+- [ ] Auth model choice:
+  - [ ] API keys are **per-tenant** (v0)
 
-### 3.2 Data isolation per API key / tenant
+### 3.2 API key lifecycle & audit
+- [ ] Key creation/rotation/revocation flow (admin + API)
+- [ ] Hashing algorithm choice documented (e.g., HMAC or PBKDF2)
+- [ ] `last_used_at` update throttling (avoid write storm)
+- [ ] Audit log for key usage (optional but recommended)
+
+### 3.3 Data isolation per API key / tenant
 - [ ] Every Document/Job/Artifact record must include:
   - [ ] `tenant_id`
   - [ ] `created_by_key_id` (or equivalent) to enforce key-level scoping
 - [ ] DRF queryset filtering by `request.auth` (API key owner):
   - [ ] Key can only see its own tenant’s objects (or strictly its own key’s objects, depending on your policy)
+
+### 3.4 Per-API key Docling defaults (admin-managed)
+- [ ] Store `docling_options_json` on API key (or tenant)
+- [ ] Apply options as defaults for new jobs unless overridden
+- [ ] Admin UI to edit per-key defaults
 
 **Acceptance criteria**
 - [ ] All endpoints reject missing/invalid key
@@ -163,6 +210,16 @@ This document is a **workable implementation task list** for a Django system tha
 - [ ] Methods:
   - [ ] `mark_started()`, `mark_finished()`, `recompute_durations()`
 
+### 4.2 Job state machine (define explicitly)
+- [ ] Allowed status transitions documented (QUEUED -> RUNNING -> SUCCEEDED/FAILED/etc.)
+- [ ] Allowed stage transitions documented (SCANNING -> CONVERTING -> EXPORTING -> CHUNKING -> FINALIZING)
+- [ ] Retry policy:
+  - [ ] When retry is allowed
+  - [ ] What is reset vs. preserved
+- [ ] Cancel policy:
+  - [ ] Best-effort cancel semantics
+  - [ ] What happens to partial artifacts
+
 #### `Artifact` (inherits `BaseModel`)
 - [ ] Fields:
   - [ ] `tenant`, `created_by_key` (FK)
@@ -212,6 +269,14 @@ This document is a **workable implementation task list** for a Django system tha
   - [ ] delete old quarantine files
   - [ ] purge artifacts older than retention policy
   - [ ] remove orphan files
+  - [ ] support `expires_at` for documents/artifacts (future deletion endpoint)
+
+### 5.4 Disk pressure & quotas
+- [ ] Per-tenant quota rules (hard/soft)
+- [ ] Low disk watermark handling:
+  - [ ] reject uploads gracefully
+  - [ ] pause new jobs if needed
+- [ ] Admin report for largest tenants/files
 
 ---
 
@@ -307,6 +372,12 @@ This document is a **workable implementation task list** for a Django system tha
   - [ ] queue length (if broker supports, or approximation)
 - [ ] `GET /v1/dashboard/jobs/active`
   - [ ] active/running job list with started_at + elapsed time
+
+### 8.5 Idempotency & dedupe
+- [ ] `Idempotency-Key` support on `POST /v1/documents`
+- [ ] Define behavior on duplicate `sha256` per tenant:
+  - [ ] create new Document vs. return existing
+  - [ ] how to handle identical filenames with same hash
 
 **Acceptance criteria**
 - [ ] All dashboard endpoints return **only** data allowed for the calling API key
@@ -424,6 +495,18 @@ This document is a **workable implementation task list** for a Django system tha
 - [ ] Expose a cost-report endpoint (later):
   - [ ] `GET /v1/reports/usage?from=...&to=...`
   - [ ] sum(duration_ms), avg(duration_ms), job counts per option type
+
+### 12.1 Operational observability
+- [ ] Health endpoints:
+  - [ ] `GET /healthz` (app)
+  - [ ] `GET /readyz` (broker/DB dependencies)
+- [ ] Metrics (Prometheus or similar):
+  - [ ] queue depth
+  - [ ] job latency per stage
+  - [ ] failure counts by error_code
+- [ ] Trace correlation:
+  - [ ] `request_id` in response headers
+  - [ ] propagate to job/task logs
 
 ---
 
