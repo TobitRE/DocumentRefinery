@@ -5,6 +5,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.http import FileResponse
 from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from authn.permissions import HasScope
@@ -12,7 +13,12 @@ from authn.permissions import APIKeyRequired
 
 from .models import Artifact, Document, IngestionJob, IngestionJobStatus, IngestionStage
 from .tasks import start_ingestion_pipeline
-from .serializers import ArtifactSerializer, DocumentSerializer, DocumentUploadSerializer
+from .serializers import (
+    ArtifactSerializer,
+    DocumentSerializer,
+    DocumentUploadSerializer,
+    JobSerializer,
+)
 
 
 class DocumentViewSet(
@@ -165,4 +171,83 @@ class ArtifactViewSet(
             content_type=artifact.content_type or "application/octet-stream",
         )
 
-# Create your views here.
+
+class JobViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = IngestionJob.objects.all()
+    serializer_class = JobSerializer
+    permission_classes = [APIKeyRequired, HasScope]
+
+    def get_permissions(self):
+        self.required_scopes = ["jobs:read"]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        api_key = self.request.auth
+        queryset = IngestionJob.objects.filter(tenant=api_key.tenant).order_by("-created_at")
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        stage_param = self.request.query_params.get("stage")
+        if stage_param:
+            queryset = queryset.filter(stage=stage_param)
+        document_id = self.request.query_params.get("document_id")
+        if document_id:
+            queryset = queryset.filter(document_id=document_id)
+        created_after = self.request.query_params.get("created_after")
+        if created_after:
+            queryset = queryset.filter(created_at__gte=created_after)
+        created_before = self.request.query_params.get("created_before")
+        if created_before:
+            queryset = queryset.filter(created_at__lte=created_before)
+        return queryset
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        job = self.get_object()
+        if job.status not in (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING):
+            return Response(
+                {"error_code": "NOT_CANCELABLE", "message": "Job cannot be canceled."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        job.status = IngestionJobStatus.CANCELED
+        job.finished_at = timezone.now()
+        job.recompute_durations()
+        job.save()
+        return Response(JobSerializer(job).data)
+
+    @action(detail=True, methods=["post"], url_path="retry")
+    def retry(self, request, pk=None):
+        job = self.get_object()
+        if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
+            return Response(
+                {"error_code": "NOT_RETRYABLE", "message": "Job cannot be retried."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if job.attempt >= job.max_retries:
+            return Response(
+                {"error_code": "RETRY_LIMIT", "message": "Retry limit reached."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        job.attempt += 1
+        job.status = IngestionJobStatus.QUEUED
+        job.stage = IngestionStage.SCANNING
+        job.error_code = ""
+        job.error_message = ""
+        job.error_details_json = None
+        job.queued_at = timezone.now()
+        job.started_at = None
+        job.finished_at = None
+        job.duration_ms = None
+        job.scan_ms = None
+        job.convert_ms = None
+        job.export_ms = None
+        job.chunk_ms = None
+        job.save()
+
+        start_ingestion_pipeline(job.id)
+        return Response(JobSerializer(job).data)

@@ -11,6 +11,12 @@ Auth: `Authorization: Api-Key <token>`
 - `GET /v1/artifacts` — list artifacts (optional `job_id` filter)
 - `GET /v1/artifacts/{id}` — download artifact
 
+## Jobs
+- `GET /v1/jobs` — list jobs (filters: `status`, `stage`, `document_id`, `created_after`, `created_before`)
+- `GET /v1/jobs/{id}` — job detail
+- `POST /v1/jobs/{id}/cancel` — cancel a queued/running job
+- `POST /v1/jobs/{id}/retry` — retry a failed/quarantined job
+
 ## Admin
 - `GET /admin/` — Django admin
 
