@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,6 +27,11 @@ SECRET_KEY = 'django-insecure-g2u+atcx84qhz6j+ej0=k7fct^7e-@z58*bzd7my02tqi6@17j
 DEBUG = True
 
 ALLOWED_HOSTS = []
+
+DATA_ROOT = os.environ.get("DATA_ROOT", "/var/lib/docling_service")
+UPLOAD_MAX_SIZE_MB = int(os.environ.get("UPLOAD_MAX_SIZE_MB", "50"))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "0"))
+DOC_DEFAULT_OPTIONS = {}
 
 
 # Application definition
