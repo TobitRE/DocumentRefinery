@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Document Refinery — Ops Dashboard</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+      :root {
+        --bg: #f7f2eb;
+        --bg-alt: #efe7dd;
+        --ink: #151515;
+        --muted: #6c5f55;
+        --accent: #c85b2a;
+        --accent-2: #2a6fc8;
+        --card: #fff9f2;
+        --shadow: 0 14px 28px rgba(19, 17, 13, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: radial-gradient(circle at top, #fff6ea 0%, var(--bg) 35%, #efe5d8 100%);
+        font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+      }
+
+      header {
+        padding: 40px 48px 24px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .title-block h1 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 44px);
+        letter-spacing: -0.02em;
+      }
+
+      .title-block p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+
+      .key-panel {
+        display: grid;
+        gap: 8px;
+        min-width: min(420px, 100%);
+      }
+
+      .key-panel label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+      }
+
+      .key-panel input {
+        padding: 12px 14px;
+        border: 1px solid #d8cbbd;
+        border-radius: 12px;
+        background: #fff;
+        font-size: 14px;
+      }
+
+      .key-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: 0;
+        background: var(--accent);
+        color: white;
+        padding: 10px 16px;
+        border-radius: 999px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: var(--shadow);
+      }
+
+      button.secondary {
+        background: var(--accent-2);
+      }
+
+      main {
+        padding: 0 48px 48px;
+        display: grid;
+        gap: 24px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid #eadfce;
+        border-radius: 20px;
+        padding: 18px 20px;
+        box-shadow: var(--shadow);
+      }
+
+      .card h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .stat {
+        font-size: 30px;
+        font-weight: 700;
+      }
+
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .mono {
+        font-family: "IBM Plex Mono", "Courier New", monospace;
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .pill {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: #fff1df;
+        border: 1px solid #f0d9c1;
+        font-size: 13px;
+      }
+
+      .status {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #ffe7d4;
+      }
+
+      .error {
+        color: #9b2c1a;
+        font-size: 13px;
+      }
+
+      .footer {
+        padding: 12px 48px 40px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      @media (max-width: 720px) {
+        header {
+          padding: 28px 24px 16px;
+        }
+
+        main {
+          padding: 0 24px 40px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title-block">
+        <h1>Document Refinery</h1>
+        <p>Operational dashboard — scoped by API key.</p>
+      </div>
+      <div class="key-panel card">
+        <label for="apiKeyInput">API key</label>
+        <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
+        <div class="key-actions">
+          <button id="saveKeyBtn">Save key</button>
+          <button class="secondary" id="refreshBtn">Refresh data</button>
+        </div>
+        <div class="muted" id="statusLine">Waiting for API key.</div>
+      </div>
+    </header>
+
+    <main>
+      <section class="grid">
+        <div class="card">
+          <h3>Queued</h3>
+          <div class="stat" id="statQueued">—</div>
+        </div>
+        <div class="card">
+          <h3>Running</h3>
+          <div class="stat" id="statRunning">—</div>
+        </div>
+        <div class="card">
+          <h3>Succeeded</h3>
+          <div class="stat" id="statSucceeded">—</div>
+        </div>
+        <div class="card">
+          <h3>Failed</h3>
+          <div class="stat" id="statFailed">—</div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Durations (24h)</h3>
+          <div class="list">
+            <div class="mono">Avg: <span id="statAvg">—</span> ms</div>
+            <div class="mono">P50: <span id="statP50">—</span> ms</div>
+            <div class="mono">P95: <span id="statP95">—</span> ms</div>
+            <div class="mono">Total: <span id="statTotal">—</span> ms</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Stages running</h3>
+          <div class="list" id="stagesRunning">No active stages.</div>
+        </div>
+        <div class="card">
+          <h3>Workers</h3>
+          <div class="list" id="workerList">—</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>Recent failures</h3>
+        <div class="list" id="recentFailures">—</div>
+      </section>
+    </main>
+
+    <div class="footer">Use an API key to scope data. Staff login required.</div>
+
+    <script>
+      const statusLine = document.getElementById("statusLine");
+      const apiKeyInput = document.getElementById("apiKeyInput");
+      const saveKeyBtn = document.getElementById("saveKeyBtn");
+      const refreshBtn = document.getElementById("refreshBtn");
+
+      const fields = {
+        queued: document.getElementById("statQueued"),
+        running: document.getElementById("statRunning"),
+        succeeded: document.getElementById("statSucceeded"),
+        failed: document.getElementById("statFailed"),
+        avg: document.getElementById("statAvg"),
+        p50: document.getElementById("statP50"),
+        p95: document.getElementById("statP95"),
+        total: document.getElementById("statTotal"),
+        stages: document.getElementById("stagesRunning"),
+        workers: document.getElementById("workerList"),
+        failures: document.getElementById("recentFailures"),
+      };
+
+      function setStatus(message, isError = false) {
+        statusLine.textContent = message;
+        statusLine.className = isError ? "error" : "muted";
+      }
+
+      function loadSavedKey() {
+        const saved = localStorage.getItem("docrefinery_api_key");
+        if (saved) {
+          apiKeyInput.value = saved;
+        }
+      }
+
+      function saveKey() {
+        localStorage.setItem("docrefinery_api_key", apiKeyInput.value.trim());
+        setStatus("API key saved.");
+      }
+
+      async function fetchJson(path) {
+        const key = apiKeyInput.value.trim();
+        if (!key) {
+          setStatus("Add an API key to load data.", true);
+          throw new Error("missing key");
+        }
+        const res = await fetch(path, {
+          headers: {
+            Authorization: `Api-Key ${key}`,
+          },
+        });
+        if (!res.ok) {
+          const msg = `Request failed (${res.status})`;
+          setStatus(msg, true);
+          throw new Error(msg);
+        }
+        return res.json();
+      }
+
+      function renderSummary(data) {
+        fields.queued.textContent = data.jobs.queued ?? 0;
+        fields.running.textContent = data.jobs.running ?? 0;
+        fields.succeeded.textContent = data.jobs.succeeded ?? 0;
+        fields.failed.textContent = data.jobs.failed ?? 0;
+        fields.avg.textContent = data.durations_ms.avg_24h ?? "—";
+        fields.p50.textContent = data.durations_ms.p50_24h ?? "—";
+        fields.p95.textContent = data.durations_ms.p95_24h ?? "—";
+        fields.total.textContent = data.durations_ms.total_24h ?? "—";
+
+        const stages = data.stages_running || {};
+        const stageEntries = Object.entries(stages);
+        fields.stages.innerHTML = stageEntries.length
+          ? stageEntries
+              .map(
+                ([name, count]) =>
+                  `<div class="pill">${name.toLowerCase()}: ${count}</div>`
+              )
+              .join("")
+          : "No active stages.";
+
+        const failures = data.recent_failures || [];
+        fields.failures.innerHTML = failures.length
+          ? failures
+              .map(
+                (item) =>
+                  `<div class="pill">Job ${item.id} · ${item.error_code || "UNKNOWN"}</div>`
+              )
+              .join("")
+          : "No recent failures.";
+      }
+
+      function renderWorkers(data) {
+        const workers = data.workers || [];
+        fields.workers.innerHTML = workers.length
+          ? workers
+              .map(
+                (worker) =>
+                  `<div class="pill">${worker.hostname} · ${worker.active_tasks} active</div>`
+              )
+              .join("")
+          : "No workers online.";
+      }
+
+      async function refresh() {
+        setStatus("Loading...");
+        try {
+          const [summary, workers] = await Promise.all([
+            fetchJson("/v1/dashboard/summary"),
+            fetchJson("/v1/dashboard/workers"),
+          ]);
+          renderSummary(summary);
+          renderWorkers(workers);
+          setStatus("Updated just now.");
+        } catch (err) {
+          if (!apiKeyInput.value.trim()) {
+            return;
+          }
+          setStatus("Failed to load data.", true);
+        }
+      }
+
+      saveKeyBtn.addEventListener("click", () => {
+        saveKey();
+        refresh();
+      });
+      refreshBtn.addEventListener("click", refresh);
+
+      loadSavedKey();
+      if (apiKeyInput.value.trim()) {
+        refresh();
+      }
+    </script>
+  </body>
+</html>

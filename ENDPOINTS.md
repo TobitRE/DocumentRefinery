@@ -20,6 +20,9 @@ Auth: `Authorization: Api-Key <token>`
 ## Admin
 - `GET /admin/` — Django admin
 
+## Dashboard UI
+- `GET /dashboard/` — staff-only dashboard page (uses API key for data)
+
 ## Dashboard
 - `GET /v1/dashboard/summary` — job counts, durations, failures
 - `GET /v1/dashboard/workers` — Celery worker status
