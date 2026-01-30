@@ -15,10 +15,10 @@ class BaseModel(models.Model):
         verbose_name="Public Identifier",
     )
     created_at = models.DateTimeField(
-        "Erstellungsdatum", null=True, blank=True, auto_now_add=True
+        "Created at", null=True, blank=True, auto_now_add=True
     )
     modified_at = models.DateTimeField(
-        "Letzte Änderungen", null=True, blank=True, auto_now=True
+        "Last modified", null=True, blank=True, auto_now=True
     )
 
     def save(self, *args, **kwargs):
