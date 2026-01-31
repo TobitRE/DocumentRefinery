@@ -1,0 +1,18 @@
+[Unit]
+Description=DocumentRefinery Gunicorn
+After=network.target
+
+[Service]
+User=docling-svc
+Group=docling-svc
+WorkingDirectory=/var/www/document_refinery
+EnvironmentFile=/var/www/document_refinery/.env
+ExecStart=/var/www/document_refinery/venv/bin/gunicorn \
+    --workers 3 \
+    --bind unix:/run/document_refinery.sock \
+    config.wsgi:application
+Restart=on-failure
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

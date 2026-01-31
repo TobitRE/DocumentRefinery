@@ -24,3 +24,6 @@ As of January 30, 2026.
 
 ## Scale assumptions
 - Unknown; track basic stats (job counts, sizes, durations) to inform tuning.
+
+## Ideas for later
+- CI pipeline (tests + lint + type checks).

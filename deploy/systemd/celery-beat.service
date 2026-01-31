@@ -1,0 +1,15 @@
+[Unit]
+Description=DocumentRefinery Celery Beat
+After=network.target
+
+[Service]
+User=docling-svc
+Group=docling-svc
+WorkingDirectory=/var/www/document_refinery
+EnvironmentFile=/var/www/document_refinery/.env
+ExecStart=/var/www/document_refinery/venv/bin/celery -A config beat --loglevel=INFO
+Restart=on-failure
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
