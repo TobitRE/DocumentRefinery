@@ -176,3 +176,13 @@ class Artifact(BaseModel):
 
     def get_storage_path(self) -> str:
         return os.path.join(settings.DATA_ROOT, self.storage_relpath)
+
+
+class JobEvent(BaseModel):
+    job = models.ForeignKey(IngestionJob, on_delete=models.CASCADE, related_name="events")
+    level = models.CharField(max_length=10, default="INFO")
+    message = models.TextField()
+    payload_json = models.JSONField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"{self.level}: {self.message[:40]}"

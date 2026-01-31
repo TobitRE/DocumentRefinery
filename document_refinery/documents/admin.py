@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Artifact, Document, IngestionJob
+from .models import Artifact, Document, IngestionJob, JobEvent
 
 
 @admin.register(Document)
@@ -44,5 +44,12 @@ class IngestionJobAdmin(admin.ModelAdmin):
 class ArtifactAdmin(admin.ModelAdmin):
     list_display = ("id", "kind", "job", "size_bytes", "created_at")
     list_filter = ("kind",)
+
+
+@admin.register(JobEvent)
+class JobEventAdmin(admin.ModelAdmin):
+    list_display = ("id", "job", "level", "message", "created_at")
+    list_filter = ("level",)
+    search_fields = ("message",)
 
 # Register your models here.
