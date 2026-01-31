@@ -12,7 +12,8 @@ Auth: `Authorization: Api-Key <token>`
 - `GET /v1/artifacts/{id}/` — download artifact
 
 ## Jobs
-- `GET /v1/jobs/` — list jobs (filters: `status`, `stage`, `document_id`, `created_after`, `created_before`)
+- `GET /v1/jobs/` — list jobs (filters: `status`, `stage`, `document_id`, `created_after`, `created_before`)  
+  - `created_after`/`created_before` must be ISO8601 (e.g. `2026-01-31T12:00:00`)
 - `GET /v1/jobs/{id}/` — job detail
 - `POST /v1/jobs/{id}/cancel/` — cancel a queued/running job
 - `POST /v1/jobs/{id}/retry/` — retry a failed/quarantined job

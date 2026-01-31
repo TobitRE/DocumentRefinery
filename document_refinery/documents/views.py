@@ -213,10 +213,22 @@ class JobViewSet(
             queryset = queryset.filter(document_id=document_id)
         created_after = self.request.query_params.get("created_after")
         if created_after:
-            queryset = queryset.filter(created_at__gte=created_after)
+            try:
+                dt = timezone.datetime.fromisoformat(created_after)
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                queryset = queryset.filter(created_at__gte=dt)
+            except ValueError:
+                return IngestionJob.objects.none()
         created_before = self.request.query_params.get("created_before")
         if created_before:
-            queryset = queryset.filter(created_at__lte=created_before)
+            try:
+                dt = timezone.datetime.fromisoformat(created_before)
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                queryset = queryset.filter(created_at__lte=dt)
+            except ValueError:
+                return IngestionJob.objects.none()
         return queryset
 
     @action(detail=True, methods=["post"], url_path="cancel")
