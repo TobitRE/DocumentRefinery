@@ -76,6 +76,15 @@
         flex-wrap: wrap;
       }
 
+      .key-meta {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
       button {
         border: 0;
         background: var(--accent);
@@ -189,6 +198,14 @@
           <button id="saveKeyBtn">Save key</button>
           <button class="secondary" id="refreshBtn">Refresh data</button>
         </div>
+        <div class="key-meta">
+          <label class="pill">
+            <input type="checkbox" id="autoRefresh" />
+            Auto-refresh (10s)
+          </label>
+          <span>Last update: <span id="lastUpdated">—</span></span>
+          <a class="pill" href="/admin/" target="_blank" rel="noopener">Open admin</a>
+        </div>
         <div class="muted" id="statusLine">Waiting for API key.</div>
       </div>
     </header>
@@ -239,13 +256,18 @@
       </section>
     </main>
 
-    <div class="footer">Use an API key to scope data. Staff login required.</div>
+    <div class="footer">
+      Staff-only page. Use an API key to scope data. Cancellation attempts to revoke Celery
+      tasks but may not stop already-running work.
+    </div>
 
     <script>
       const statusLine = document.getElementById("statusLine");
       const apiKeyInput = document.getElementById("apiKeyInput");
       const saveKeyBtn = document.getElementById("saveKeyBtn");
       const refreshBtn = document.getElementById("refreshBtn");
+      const autoRefresh = document.getElementById("autoRefresh");
+      const lastUpdated = document.getElementById("lastUpdated");
 
       const fields = {
         queued: document.getElementById("statQueued"),
@@ -351,6 +373,7 @@
           renderSummary(summary);
           renderWorkers(workers);
           setStatus("Updated just now.");
+          lastUpdated.textContent = new Date().toLocaleTimeString();
         } catch (err) {
           if (!apiKeyInput.value.trim()) {
             return;
@@ -364,11 +387,22 @@
         refresh();
       });
       refreshBtn.addEventListener("click", refresh);
+      autoRefresh.addEventListener("change", () => {
+        if (autoRefresh.checked) {
+          setStatus("Auto-refresh enabled.");
+        }
+      });
 
       loadSavedKey();
       if (apiKeyInput.value.trim()) {
         refresh();
       }
+
+      setInterval(() => {
+        if (autoRefresh.checked) {
+          refresh();
+        }
+      }, 10000);
     </script>
   </body>
 </html>
