@@ -67,6 +67,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'core.middleware.RequestIDMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -90,6 +91,23 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = (
 )
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
     "api_key": os.environ.get("API_THROTTLE_RATE", "120/min"),
+}
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "simple": {
+            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
 }
 
 ROOT_URLCONF = 'config.urls'
