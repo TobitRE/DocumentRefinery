@@ -11,6 +11,8 @@ from rest_framework.response import Response
 from authn.permissions import HasScope
 from authn.permissions import APIKeyRequired
 
+from django.db import IntegrityError
+
 from .models import Artifact, Document, IngestionJob, IngestionJobStatus, IngestionStage
 from .tasks import start_ingestion_pipeline
 from .serializers import (
@@ -102,7 +104,15 @@ class DocumentViewSet(
         doc.sha256 = hasher.hexdigest()
         doc.size_bytes = size_bytes
         doc.storage_relpath_quarantine = relpath
-        doc.save()
+        try:
+            doc.save()
+        except IntegrityError:
+            if os.path.exists(abs_path):
+                os.remove(abs_path)
+            return Response(
+                {"error_code": "DUPLICATE_DOCUMENT", "message": "Document already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         job_id = None
         if ingest:
@@ -154,6 +164,9 @@ class ArtifactViewSet(
 
         relpath = artifact.storage_relpath
         abs_path = os.path.join(settings.DATA_ROOT, relpath)
+
+        if not os.path.exists(abs_path):
+            return Response(status=status.HTTP_404_NOT_FOUND)
 
         if settings.X_ACCEL_REDIRECT_ENABLED:
             response = Response()

@@ -8,4 +8,4 @@ class APIKeyRateThrottle(SimpleRateThrottle):
         api_key = getattr(request, "api_key", None)
         if not api_key:
             return None
-        return f"api_key:{api_key.prefix}"
+        return f"api_key:{api_key.key_hash}"
