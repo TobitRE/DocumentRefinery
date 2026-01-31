@@ -23,6 +23,10 @@ Auth: `Authorization: Api-Key <token>`
 ## Dashboard UI
 - `GET /dashboard/` — staff-only dashboard page (uses API key for data)
 
+## Health
+- `GET /healthz` — basic liveness check
+- `GET /readyz` — readiness (DB + broker)
+
 ## Dashboard
 - `GET /v1/dashboard/summary` — job counts, durations, failures
 - `GET /v1/dashboard/workers` — Celery worker status
