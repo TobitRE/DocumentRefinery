@@ -54,6 +54,15 @@ def cleanup_expired_documents(self) -> int:
     expired_docs = Document.objects.filter(expires_at__lt=now)
     deleted = 0
     for doc in expired_docs:
+        artifacts = Artifact.objects.filter(job__document=doc)
+        for artifact in artifacts:
+            abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+            try:
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+            except OSError:
+                pass
+        artifacts.delete()
         for path in filter(None, [doc.get_quarantine_path(), doc.get_clean_path()]):
             try:
                 if os.path.exists(path):
