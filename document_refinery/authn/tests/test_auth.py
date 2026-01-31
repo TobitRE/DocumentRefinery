@@ -32,3 +32,20 @@ class TestAPIKeyAuth(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
         response = self.client.get("/v1/documents/")
         self.assertEqual(response.status_code, 200)
+
+
+class TestDoclingOptionsValidation(TestCase):
+    def test_invalid_options_rejected(self):
+        tenant = Tenant.objects.create(name="Acme", slug="acme")
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        api_key = APIKey(
+            tenant=tenant,
+            name="Primary",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=["documents:read"],
+            active=True,
+            docling_options_json={"max_num_pages": "ten"},
+        )
+        with self.assertRaises(Exception):
+            api_key.save()

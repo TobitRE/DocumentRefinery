@@ -12,6 +12,7 @@ class Tenant(BaseModel):
     name = models.CharField(max_length=200)
     slug = models.SlugField(unique=True)
     active = models.BooleanField(default=True)
+    docling_options_json = models.JSONField(null=True, blank=True)
 
     def __str__(self) -> str:
         return self.name
@@ -28,6 +29,11 @@ class APIKey(BaseModel):
     active = models.BooleanField(default=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     docling_options_json = models.JSONField(null=True, blank=True)
+
+    def clean(self):
+        from .options import validate_docling_options
+
+        validate_docling_options(self.docling_options_json)
 
     def __str__(self) -> str:
         return f"{self.name} ({self.prefix})"

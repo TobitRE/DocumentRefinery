@@ -117,7 +117,13 @@ class DocumentViewSet(
 
         job_id = None
         if ingest:
-            options_json = options_json or api_key.docling_options_json or {}
+            options_json = (
+                options_json
+                or api_key.docling_options_json
+                or getattr(api_key.tenant, "docling_options_json", None)
+                or settings.DOC_DEFAULT_OPTIONS
+                or {}
+            )
             job = IngestionJob.objects.create(
                 tenant=api_key.tenant,
                 created_by_key=api_key,

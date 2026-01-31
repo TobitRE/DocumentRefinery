@@ -8,6 +8,10 @@ class TenantAdmin(admin.ModelAdmin):
     list_display = ("name", "slug", "active", "created_at")
     list_filter = ("active",)
     search_fields = ("name", "slug")
+    fieldsets = (
+        (None, {"fields": ("name", "slug", "active")}),
+        ("Docling defaults", {"fields": ("docling_options_json",)}),
+    )
 
 
 @admin.register(APIKey)
@@ -17,6 +21,11 @@ class APIKeyAdmin(admin.ModelAdmin):
     search_fields = ("name", "prefix")
     readonly_fields = ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")
     actions = ("deactivate_keys", "rotate_keys")
+    fieldsets = (
+        (None, {"fields": ("tenant", "name", "active", "scopes")}),
+        ("Docling defaults", {"fields": ("docling_options_json",)}),
+        ("Key data", {"fields": ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")}),
+    )
 
     def save_model(self, request, obj, form, change):
         if not change and not obj.key_hash:
