@@ -18,6 +18,7 @@ from .models import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
+    Document,
 )
 
 
@@ -28,6 +29,40 @@ def start_ingestion_pipeline(job_id: int):
         export_artifacts_task.s(),
         finalize_job_task.s(),
     ).apply_async()
+
+
+@shared_task(bind=True)
+def cleanup_expired_artifacts(self) -> int:
+    now = timezone.now()
+    expired_artifacts = Artifact.objects.filter(expires_at__lt=now)
+    deleted = 0
+    for artifact in expired_artifacts:
+        abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+        try:
+            if os.path.exists(abs_path):
+                os.remove(abs_path)
+        except OSError:
+            pass
+        artifact.delete()
+        deleted += 1
+    return deleted
+
+
+@shared_task(bind=True)
+def cleanup_expired_documents(self) -> int:
+    now = timezone.now()
+    expired_docs = Document.objects.filter(expires_at__lt=now)
+    deleted = 0
+    for doc in expired_docs:
+        for path in filter(None, [doc.get_quarantine_path(), doc.get_clean_path()]):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        doc.delete()
+        deleted += 1
+    return deleted
 
 
 def _write_bytes_atomic(path: Path, data: bytes) -> None:

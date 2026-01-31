@@ -56,6 +56,7 @@ class Document(BaseModel):
         max_length=20, choices=DocumentStatus.choices, default=DocumentStatus.UPLOADED
     )
     page_count = models.PositiveIntegerField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -157,6 +158,7 @@ class Artifact(BaseModel):
     checksum_sha256 = models.CharField(max_length=64)
     size_bytes = models.BigIntegerField()
     content_type = models.CharField(max_length=100, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
