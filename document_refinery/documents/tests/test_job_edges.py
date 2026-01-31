@@ -22,6 +22,7 @@ class TestJobCancelSemantics(TestCase):
             scopes=["jobs:read"],
             active=True,
         )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
 
     def test_finalize_does_not_override_canceled(self):
         doc = Document.objects.create(
@@ -44,6 +45,30 @@ class TestJobCancelSemantics(TestCase):
         finalize_job_task(job.id)
         job.refresh_from_db()
         self.assertEqual(job.status, IngestionJobStatus.CANCELED)
+
+    def test_cancel_revokes_task(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="e" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/e/e.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=doc,
+            status=IngestionJobStatus.RUNNING,
+            stage=IngestionStage.CONVERTING,
+            celery_task_id="task-123",
+        )
+
+        with patch("documents.views.current_app.control.revoke") as revoke_mock:
+            response = self.client.post(f"/v1/jobs/{job.id}/cancel/")
+        self.assertEqual(response.status_code, 200)
+        revoke_mock.assert_called_once()
 
 
 class TestJobRetryArtifacts(TestCase):

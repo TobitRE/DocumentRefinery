@@ -23,12 +23,23 @@ from .models import (
 
 
 def start_ingestion_pipeline(job_id: int):
-    return chain(
+    result = chain(
         scan_pdf_task.s(job_id),
         docling_convert_task.s(),
         export_artifacts_task.s(),
         finalize_job_task.s(),
     ).apply_async()
+    try:
+        job = IngestionJob.objects.filter(pk=job_id).first()
+        if job:
+            root = result
+            while getattr(root, "parent", None):
+                root = root.parent
+            job.celery_task_id = root.id
+            job.save(update_fields=["celery_task_id"])
+    except Exception:
+        pass
+    return result
 
 
 @shared_task(bind=True)

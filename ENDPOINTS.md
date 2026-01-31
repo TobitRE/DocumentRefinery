@@ -15,7 +15,7 @@ Auth: `Authorization: Api-Key <token>`
 - `GET /v1/jobs/` — list jobs (filters: `status`, `stage`, `document_id`, `created_after`, `created_before`)  
   - `created_after`/`created_before` must be ISO8601 (e.g. `2026-01-31T12:00:00`)
 - `GET /v1/jobs/{id}/` — job detail
-- `POST /v1/jobs/{id}/cancel/` — cancel a queued/running job (best-effort; may not stop already running tasks)
+- `POST /v1/jobs/{id}/cancel/` — cancel a queued/running job (best-effort; attempts to revoke worker task)
 - `POST /v1/jobs/{id}/retry/` — retry a failed/quarantined job
 
 ## Admin

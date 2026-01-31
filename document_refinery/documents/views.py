@@ -7,6 +7,7 @@ from django.http import FileResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from celery import current_app
 
 from authn.permissions import HasScope
 from authn.permissions import APIKeyRequired
@@ -243,6 +244,11 @@ class JobViewSet(
         job.finished_at = timezone.now()
         job.recompute_durations()
         job.save()
+        if job.celery_task_id:
+            try:
+                current_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
+            except Exception:
+                pass
         return Response(JobSerializer(job).data)
 
     @action(detail=True, methods=["post"], url_path="retry")
