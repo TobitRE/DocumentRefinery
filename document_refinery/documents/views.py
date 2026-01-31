@@ -246,7 +246,11 @@ class JobViewSet(
         job.save()
         if job.celery_task_id:
             try:
-                current_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
+                current_app.control.revoke(
+                    job.celery_task_id,
+                    terminate=True,
+                    signal=settings.CELERY_CANCEL_SIGNAL,
+                )
             except Exception:
                 pass
         return Response(JobSerializer(job).data)

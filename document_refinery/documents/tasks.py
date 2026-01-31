@@ -28,7 +28,7 @@ def start_ingestion_pipeline(job_id: int):
         docling_convert_task.s(),
         export_artifacts_task.s(),
         finalize_job_task.s(),
-    ).apply_async()
+    ).apply_async(queue=settings.CELERY_DEFAULT_QUEUE)
     try:
         job = IngestionJob.objects.filter(pk=job_id).first()
         if job:

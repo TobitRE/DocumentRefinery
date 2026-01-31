@@ -45,6 +45,9 @@ CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
 X_ACCEL_REDIRECT_ENABLED = os.environ.get("X_ACCEL_REDIRECT_ENABLED", "true").lower() == "true"
 X_ACCEL_REDIRECT_LOCATION = os.environ.get("X_ACCEL_REDIRECT_LOCATION", "/protected")
 
+CELERY_CANCEL_SIGNAL = os.environ.get("CELERY_CANCEL_SIGNAL", "SIGTERM")
+CELERY_DEFAULT_QUEUE = os.environ.get("CELERY_DEFAULT_QUEUE", "default")
+
 
 # Application definition
 
