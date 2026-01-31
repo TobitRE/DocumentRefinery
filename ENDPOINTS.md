@@ -26,6 +26,7 @@ Auth: `Authorization: Api-Key <token>`
 ## Health
 - `GET /healthz` — basic liveness check
 - `GET /readyz` — readiness (DB + broker)
+- `GET /metrics` — basic Prometheus-style metrics
 
 ## Dashboard
 - `GET /v1/dashboard/summary` — job counts, durations, failures
