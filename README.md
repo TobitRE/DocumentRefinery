@@ -44,3 +44,8 @@ Expected configuration values (to be finalized in the implementation):
 ## References
 
 See `docling_django_task_list.md` for the detailed architecture and task plan.
+
+## Operational docs
+
+- `DEPLOYMENT.md`
+- `EXTERNAL_SERVICES.md`

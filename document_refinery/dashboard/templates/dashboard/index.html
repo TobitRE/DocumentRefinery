@@ -248,6 +248,10 @@
           <h3>Workers</h3>
           <div class="list" id="workerList">—</div>
         </div>
+        <div class="card">
+          <h3>System status</h3>
+          <div class="list" id="systemStatus">—</div>
+        </div>
       </section>
 
       <section class="card">
@@ -280,6 +284,7 @@
         total: document.getElementById("statTotal"),
         stages: document.getElementById("stagesRunning"),
         workers: document.getElementById("workerList"),
+        system: document.getElementById("systemStatus"),
         failures: document.getElementById("recentFailures"),
       };
 
@@ -366,12 +371,18 @@
       async function refresh() {
         setStatus("Loading...");
         try {
-          const [summary, workers] = await Promise.all([
+          const [summary, workers, health, ready] = await Promise.all([
             fetchJson("/v1/dashboard/summary"),
             fetchJson("/v1/dashboard/workers"),
+            fetch("/healthz").then((res) => res.json()),
+            fetch("/readyz").then((res) => res.json()),
           ]);
           renderSummary(summary);
           renderWorkers(workers);
+          fields.system.innerHTML = `
+            <div class="pill">healthz: ${health.status || "unknown"}</div>
+            <div class="pill">readyz: ${ready.status || "unknown"}</div>
+          `;
           setStatus("Updated just now.");
           lastUpdated.textContent = new Date().toLocaleTimeString();
         } catch (err) {
