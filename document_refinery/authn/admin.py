@@ -16,6 +16,7 @@ class APIKeyAdmin(admin.ModelAdmin):
     list_filter = ("active", "tenant")
     search_fields = ("name", "prefix")
     readonly_fields = ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")
+    actions = ("deactivate_keys", "rotate_keys")
 
     def save_model(self, request, obj, form, change):
         if not change and not obj.key_hash:
@@ -40,5 +41,27 @@ class APIKeyAdmin(admin.ModelAdmin):
             )
             delattr(self, "_raw_key")
         return response
+
+    @admin.action(description="Deactivate selected API keys")
+    def deactivate_keys(self, request, queryset):
+        updated = queryset.update(active=False)
+        self.message_user(request, f"Deactivated {updated} keys.")
+
+    @admin.action(description="Rotate selected API keys (new secret shown once)")
+    def rotate_keys(self, request, queryset):
+        rotated = 0
+        for api_key in queryset:
+            raw_key, prefix, key_hash = APIKey.generate_key()
+            api_key.prefix = prefix
+            api_key.key_hash = key_hash
+            api_key.active = True
+            api_key.save()
+            self.message_user(
+                request,
+                f"{api_key.name} rotated key (copy now): {raw_key}",
+                messages.WARNING,
+            )
+            rotated += 1
+        self.message_user(request, f"Rotated {rotated} keys.")
 
 # Register your models here.

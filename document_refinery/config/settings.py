@@ -85,6 +85,13 @@ REST_FRAMEWORK = {
     ),
 }
 
+REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = (
+    "authn.throttling.APIKeyRateThrottle",
+)
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
+    "api_key": os.environ.get("API_THROTTLE_RATE", "120/min"),
+}
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [

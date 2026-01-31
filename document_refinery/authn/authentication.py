@@ -27,6 +27,7 @@ class APIKeyAuthentication(authentication.BaseAuthentication):
             return None
 
         self._touch_last_used(api_key)
+        request.api_key = api_key
         return (None, api_key)
 
     def authenticate_header(self, request):
