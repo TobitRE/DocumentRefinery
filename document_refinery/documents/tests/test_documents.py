@@ -3,15 +3,14 @@ import os
 import tempfile
 
 from django.test import TestCase, override_settings
-from django.utils import timezone
 from rest_framework.test import APIClient
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from authn.models import APIKey, Tenant
-from .models import Document
+from documents.models import Document
 
 
-class DocumentUploadTests(TestCase):
+class TestDocumentUpload(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.tenant = Tenant.objects.create(name="Acme", slug="acme")
@@ -36,7 +35,7 @@ class DocumentUploadTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             self._auth()
             upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
-            response = self.client.post("/v1/documents", {"file": upload}, format="multipart")
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 201)
 
             doc = Document.objects.get(pk=response.data["id"])
@@ -52,11 +51,11 @@ class DocumentUploadTests(TestCase):
         ):
             self._auth()
             upload = SimpleUploadedFile("big.pdf", content, content_type="application/pdf")
-            response = self.client.post("/v1/documents", {"file": upload}, format="multipart")
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 413)
 
 
-class DocumentScopeTests(TestCase):
+class TestDocumentScope(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.tenant_a = Tenant.objects.create(name="Tenant A", slug="tenant-a")
@@ -96,6 +95,6 @@ class DocumentScopeTests(TestCase):
 
     def test_key_cannot_access_other_tenant_docs(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key_b}")
-        response = self.client.get("/v1/documents")
+        response = self.client.get("/v1/documents/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 0)

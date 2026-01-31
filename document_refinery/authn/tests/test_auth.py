@@ -1,10 +1,10 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import APIKey, Tenant
+from authn.models import APIKey, Tenant
 
 
-class APIKeyAuthTests(TestCase):
+class TestAPIKeyAuth(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.tenant = Tenant.objects.create(name="Acme", slug="acme")
@@ -20,15 +20,15 @@ class APIKeyAuthTests(TestCase):
         )
 
     def test_missing_key_rejected(self):
-        response = self.client.get("/v1/documents")
-        self.assertEqual(response.status_code, 403)
+        response = self.client.get("/v1/documents/")
+        self.assertEqual(response.status_code, 401)
 
     def test_invalid_key_rejected(self):
         self.client.credentials(HTTP_AUTHORIZATION="Api-Key invalid")
-        response = self.client.get("/v1/documents")
-        self.assertEqual(response.status_code, 403)
+        response = self.client.get("/v1/documents/")
+        self.assertEqual(response.status_code, 401)
 
     def test_valid_key_allows_access(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
-        response = self.client.get("/v1/documents")
+        response = self.client.get("/v1/documents/")
         self.assertEqual(response.status_code, 200)
