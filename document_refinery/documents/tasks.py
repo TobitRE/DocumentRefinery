@@ -114,9 +114,15 @@ def _mark_failed(job: IngestionJob, code: str, message: str, details: dict | Non
     job.save()
 
 
+def _is_canceled(job: IngestionJob) -> bool:
+    return job.status == IngestionJobStatus.CANCELED
+
+
 @shared_task(bind=True)
 def scan_pdf_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
+    if _is_canceled(job):
+        return job_id
     job.stage = IngestionStage.SCANNING
     if not job.started_at:
         job.started_at = timezone.now()
@@ -168,6 +174,8 @@ def scan_pdf_task(self, job_id: int) -> int:
 @shared_task(bind=True)
 def docling_convert_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
+    if _is_canceled(job):
+        return job_id
     job.stage = IngestionStage.CONVERTING
     job.status = IngestionJobStatus.RUNNING
     job.save()
@@ -211,6 +219,8 @@ def docling_convert_task(self, job_id: int) -> int:
 @shared_task(bind=True)
 def export_artifacts_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
+    if _is_canceled(job):
+        return job_id
     job.stage = IngestionStage.EXPORTING
     job.status = IngestionJobStatus.RUNNING
     job.save()
@@ -267,6 +277,8 @@ def export_artifacts_task(self, job_id: int) -> int:
 @shared_task(bind=True)
 def finalize_job_task(self, job_id: int) -> int:
     job = IngestionJob.objects.get(pk=job_id)
+    if _is_canceled(job):
+        return job_id
     job.stage = IngestionStage.FINALIZING
     job.status = IngestionJobStatus.SUCCEEDED
     job.finished_at = timezone.now()

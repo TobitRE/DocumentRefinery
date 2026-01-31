@@ -233,6 +233,16 @@ class JobViewSet(
                 {"error_code": "RETRY_LIMIT", "message": "Retry limit reached."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        artifacts = Artifact.objects.filter(job=job)
+        for artifact in artifacts:
+            abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+            try:
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+            except OSError:
+                pass
+        artifacts.delete()
+
         job.attempt += 1
         job.status = IngestionJobStatus.QUEUED
         job.stage = IngestionStage.SCANNING
