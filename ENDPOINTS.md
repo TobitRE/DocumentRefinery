@@ -31,3 +31,4 @@ Auth: `Authorization: Api-Key <token>`
 ## Dashboard
 - `GET /v1/dashboard/summary` — job counts, durations, failures
 - `GET /v1/dashboard/workers` — Celery worker status
+- `GET /v1/dashboard/reports/usage?from=...&to=...` — usage totals (duration + job count)

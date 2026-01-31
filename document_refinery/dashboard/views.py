@@ -141,4 +141,37 @@ class DashboardWorkersView(APIView):
         _WORKER_CACHE["ts"] = now
         return Response(payload)
 
+
+class UsageReportView(APIView):
+    permission_classes = [APIKeyRequired, HasScope]
+    required_scopes = ["dashboard:read"]
+
+    def get(self, request):
+        api_key = request.auth
+        jobs = IngestionJob.objects.filter(tenant=api_key.tenant, duration_ms__isnull=False)
+
+        date_from = request.query_params.get("from")
+        date_to = request.query_params.get("to")
+        if date_from:
+            jobs = jobs.filter(finished_at__gte=date_from)
+        if date_to:
+            jobs = jobs.filter(finished_at__lte=date_to)
+
+        aggregates = jobs.aggregate(
+            total_duration_ms=Sum("duration_ms"),
+            avg_duration_ms=Avg("duration_ms"),
+            job_count=Count("id"),
+        )
+
+        payload = {
+            "from": date_from,
+            "to": date_to,
+            "job_count": aggregates["job_count"] or 0,
+            "total_duration_ms": aggregates["total_duration_ms"] or 0,
+            "avg_duration_ms": int(aggregates["avg_duration_ms"])
+            if aggregates["avg_duration_ms"] is not None
+            else None,
+        }
+        return Response(payload)
+
 # Create your views here.
