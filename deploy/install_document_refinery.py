@@ -187,7 +187,10 @@ def main() -> None:
     run_cmd(["systemctl", "enable", "--now", "redis-server"], required=True)
     run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
     run_cmd(["systemctl", "enable", "--now", "clamav-freshclam"], required=True)
-    run_cmd(["freshclam"])
+    if ask_user("Run freshclam update now?", default=False):
+        run_cmd(["systemctl", "stop", "clamav-freshclam"])
+        run_cmd(["freshclam"])
+        run_cmd(["systemctl", "start", "clamav-freshclam"], required=True)
     if install_fail2ban:
         run_cmd(["systemctl", "enable", "--now", "fail2ban"], required=True)
     run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
