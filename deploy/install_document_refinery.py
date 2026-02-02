@@ -215,26 +215,40 @@ from pathlib import Path
 
 from docling.document_converter import DocumentConverter
 
-pdf_bytes = (
-    b"%PDF-1.4\n"
-    b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-    b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
-    b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n"
-    b"4 0 obj << /Length 44 >> stream\n"
-    b"BT /F1 18 Tf 10 100 Td (Hello Docling) Tj ET\n"
-    b"endstream endobj\n"
-    b"xref\n"
-    b"0 5\n"
-    b"0000000000 65535 f\n"
-    b"0000000010 00000 n\n"
-    b"0000000060 00000 n\n"
-    b"0000000117 00000 n\n"
-    b"0000000200 00000 n\n"
-    b"trailer << /Root 1 0 R /Size 5 >>\n"
-    b"startxref\n"
-    b"290\n"
-    b"%%EOF\n"
-)
+def build_pdf() -> bytes:
+    header = b"%PDF-1.4\n"
+    stream = b"BT /F1 18 Tf 10 100 Td (Hello Docling) Tj ET\n"
+    objects = [
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+        (
+            b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n"
+        ),
+        b"4 0 obj << /Length %d >> stream\n" % len(stream)
+        + stream
+        + b"endstream endobj\n",
+        b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+    ]
+    offsets = []
+    current = len(header)
+    for obj in objects:
+        offsets.append(current)
+        current += len(obj)
+    xref_offset = current
+    xref_lines = [b"xref\n", b"0 6\n", b"0000000000 65535 f \n"]
+    for off in offsets:
+        xref_lines.append(f"{off:010d} 00000 n \n".encode("ascii"))
+    trailer = (
+        b"trailer << /Root 1 0 R /Size 6 >>\n"
+        b"startxref\n"
+        + f"{xref_offset}\n".encode("ascii")
+        + b"%%EOF\n"
+    )
+    return header + b"".join(objects) + b"".join(xref_lines) + trailer
+
+
+pdf_bytes = build_pdf()
 
 with tempfile.TemporaryDirectory() as tmp:
     pdf_path = Path(tmp) / "test.pdf"
