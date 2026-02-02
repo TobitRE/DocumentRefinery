@@ -81,6 +81,13 @@ Skip migrations during install (e.g. for read-only DB access):
 sudo python3 deploy/install_document_refinery.py --skip-migrate
 ```
 
+Help and non-interactive inputs:
+
+```bash
+python3 deploy/install_document_refinery.py -h
+sudo python3 deploy/install_document_refinery.py --domain docs.example.com --certbot-email admin@example.com --request-tls
+```
+
 ## Update script
 
 For deployments using systemd + nginx, you can update in-place from the repo root:

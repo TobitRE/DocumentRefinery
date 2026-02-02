@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import grp
+import argparse
 import os
 import pwd
 import secrets
@@ -154,11 +155,49 @@ def sanitize_env_value(value: str | None) -> str | None:
     return value.strip().strip('"').strip("'")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="DocumentRefinery install helper",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip destructive steps by default.",
+    )
+    parser.add_argument(
+        "--only-nginx",
+        action="store_true",
+        help="Only write nginx config and reload (requires existing .env).",
+    )
+    parser.add_argument(
+        "--skip-migrate",
+        action="store_true",
+        help="Skip Django migrations.",
+    )
+    parser.add_argument(
+        "--request-tls",
+        action="store_true",
+        help="Force certbot TLS request even in resume mode.",
+    )
+    parser.add_argument(
+        "--domain",
+        help="Domain name for nginx/certbot (optional).",
+    )
+    parser.add_argument(
+        "--certbot-email",
+        help="Email address for certbot registration (optional).",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     require_root()
-    resume = "--resume" in sys.argv
-    only_nginx = "--only-nginx" in sys.argv
-    skip_migrate = "--skip-migrate" in sys.argv or only_nginx
+    args = parse_args()
+    resume = args.resume
+    only_nginx = args.only_nginx
+    skip_migrate = args.skip_migrate or only_nginx
+    force_tls = args.request_tls
 
     repo_root = find_repo_root(Path(__file__).resolve())
     project_dir = repo_root / "document_refinery"
@@ -335,9 +374,10 @@ except Exception as exc:
     data_root = None
     static_root = None
 
-    domain_name = ""
-    if not only_nginx and ask_user("Do you have a domain for Nginx?", default=False):
-        domain_name = get_input("Domain name (example: docs.example.com)")
+    domain_name = args.domain or ""
+    if not only_nginx and not domain_name:
+        if ask_user("Do you have a domain for Nginx?", default=False):
+            domain_name = get_input("Domain name (example: docs.example.com)")
 
     if env_path.exists() and resume:
         print(f"{YELLOW}Using existing .env in resume mode.{RESET}")
@@ -675,8 +715,10 @@ WantedBy=multi-user.target
         print_step("TLS")
         certbot_available = install_certbot or shutil.which("certbot")
         if domain_name and certbot_available:
-            if ask_user("Request TLS certificate with certbot?", default=False if resume else True):
-                email = get_input("Certbot email")
+            if force_tls or ask_user(
+                "Request TLS certificate with certbot?", default=False if resume else True
+            ):
+                email = args.certbot_email or get_input("Certbot email")
                 run_cmd(
                     [
                         "certbot",

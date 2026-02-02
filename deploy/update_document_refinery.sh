@@ -161,20 +161,20 @@ print_status "Collecting static files..."
 ${PY_BIN} document_refinery/manage.py collectstatic --noinput
 
 print_status "Restarting services..."
-if sudo systemctl list-unit-files | grep -q '^gunicorn.service'; then
-  sudo systemctl restart gunicorn.service
+if sudo systemctl list-unit-files | grep -q '^gunicorn'; then
+  sudo systemctl restart gunicorn
 else
-  print_warning "gunicorn.service not found"
+  print_warning "gunicorn service not found"
 fi
 
-if sudo systemctl list-unit-files | grep -q '^celery-worker.service'; then
-  sudo systemctl restart celery-worker.service
+if sudo systemctl list-unit-files | grep -q '^celery-worker'; then
+  sudo systemctl restart celery-worker
 else
-  print_warning "celery-worker.service not found"
+  print_warning "celery-worker service not found"
 fi
 
-if sudo systemctl list-unit-files | grep -q '^celery-beat.service'; then
-  sudo systemctl restart celery-beat.service || print_warning "celery-beat restart failed"
+if sudo systemctl list-unit-files | grep -q '^celery-beat'; then
+  sudo systemctl restart celery-beat || print_warning "celery-beat restart failed"
 fi
 
 print_status "Reloading nginx..."
