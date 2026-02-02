@@ -8,3 +8,4 @@ redis
 gunicorn
 docling
 clamav-client
+psycopg2-binary

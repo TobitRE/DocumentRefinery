@@ -59,6 +59,7 @@ Notes:
   configure systemd + nginx, and optionally request TLS via certbot.
 - It installs and enables `clamav-freshclam` for signature updates.
 - It can run a Docling smoke test and will prompt for an email-based superuser.
+- It can configure PostgreSQL and set `DATABASE_URL` when requested.
 - The dashboard includes a staff-only system stats panel at `/dashboard/`.
 
 Resume mode (skip destructive steps by default):
@@ -116,6 +117,7 @@ Expected configuration values:
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND` (optional)
 - `ALLOWED_HOSTS`
+- `DATABASE_URL` (optional, defaults to SQLite)
 - `INTERNAL_ENDPOINTS_TOKEN` (optional)
 - `CORS_ALLOWED_ORIGINS` (if needed)
 

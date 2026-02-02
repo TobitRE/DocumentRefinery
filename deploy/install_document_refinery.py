@@ -6,6 +6,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 
@@ -194,12 +195,16 @@ def main() -> None:
     ]
     install_fail2ban = False
     install_certbot = False
+    install_postgres = False
     install_packages = ask_user("Install/ensure system packages?", default=not resume)
     if install_packages:
         if ask_user("Install OCR deps (tesseract-ocr, libgl1)?", default=not resume):
             deps.extend(["tesseract-ocr", "libgl1"])
         if ask_user("Install UFW firewall package?", default=False):
             deps.append("ufw")
+        if ask_user("Install PostgreSQL server?", default=False):
+            deps.extend(["postgresql", "postgresql-contrib"])
+            install_postgres = True
         if ask_user("Install fail2ban?", default=False):
             deps.append("fail2ban")
             install_fail2ban = True
@@ -219,6 +224,8 @@ def main() -> None:
         run_cmd(["systemctl", "start", "clamav-freshclam"], required=True)
     if install_fail2ban:
         run_cmd(["systemctl", "enable", "--now", "fail2ban"], required=True)
+    if install_postgres:
+        run_cmd(["systemctl", "enable", "--now", "postgresql"], required=True)
     run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
 
     print_step("Python Environment")
@@ -329,6 +336,71 @@ except Exception as exc:
         data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
         broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
+        database_url = None
+        if ask_user("Use PostgreSQL for DATABASE_URL?", default=False):
+            db_name = get_input("Postgres database name", "document_refinery")
+            db_user = get_input("Postgres user", "docrefinery")
+            db_password = get_input("Postgres password (leave blank to generate)", "")
+            if not db_password:
+                db_password = secrets.token_urlsafe(24)
+                print(f"{GREEN}Generated Postgres password: {db_password}{RESET}")
+            db_host = get_input("Postgres host", "localhost")
+            db_port = get_input("Postgres port", "5432")
+
+            if db_host in ("localhost", "127.0.0.1") and shutil.which("psql"):
+                escaped_pw = db_password.replace("'", "''")
+                role_check = (
+                    f"SELECT 1 FROM pg_roles WHERE rolname='{db_user}';"
+                )
+                db_check = (
+                    f"SELECT 1 FROM pg_database WHERE datname='{db_name}';"
+                )
+                try:
+                    role_exists = subprocess.check_output(
+                        ["sudo", "-u", "postgres", "psql", "-tAc", role_check],
+                        text=True,
+                    ).strip()
+                    if role_exists != "1":
+                        run_cmd(
+                            [
+                                "sudo",
+                                "-u",
+                                "postgres",
+                                "psql",
+                                "-c",
+                                f"CREATE ROLE \"{db_user}\" WITH LOGIN PASSWORD '{escaped_pw}';",
+                            ],
+                            required=True,
+                        )
+                    db_exists = subprocess.check_output(
+                        ["sudo", "-u", "postgres", "psql", "-tAc", db_check],
+                        text=True,
+                    ).strip()
+                    if db_exists != "1":
+                        run_cmd(
+                            [
+                                "sudo",
+                                "-u",
+                                "postgres",
+                                "psql",
+                                "-c",
+                                f"CREATE DATABASE \"{db_name}\" OWNER \"{db_user}\";",
+                            ],
+                            required=True,
+                        )
+                except subprocess.CalledProcessError as exc:
+                    print(f"{RED}Postgres setup failed: {exc}{RESET}")
+            else:
+                print(
+                    f"{YELLOW}Skipping automatic Postgres setup (host={db_host}, psql not available).{RESET}"
+                )
+
+            user_enc = urllib.parse.quote_plus(db_user)
+            pass_enc = urllib.parse.quote_plus(db_password)
+            database_url = (
+                f"postgresql://{user_enc}:{pass_enc}@{db_host}:{db_port}/{db_name}"
+            )
+
         internal_token = ""
         if ask_user("Protect /healthz,/readyz,/metrics with a token?", default=True):
             internal_token = secrets.token_urlsafe(32)
@@ -349,6 +421,8 @@ except Exception as exc:
                 "CELERY_BROKER_URL": broker_url,
                 "INTERNAL_ENDPOINTS_TOKEN": internal_token,
             }
+            if database_url:
+                overrides["DATABASE_URL"] = database_url
             write_file(env_path, render_env(template_text, overrides), mode=0o640)
 
     if not data_root:
