@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import grp
 import os
 import pwd
 import secrets
@@ -84,6 +85,14 @@ def find_repo_root(start: Path) -> Path:
 def user_exists(username: str) -> bool:
     try:
         pwd.getpwnam(username)
+        return True
+    except KeyError:
+        return False
+
+
+def group_exists(groupname: str) -> bool:
+    try:
+        grp.getgrnam(groupname)
         return True
     except KeyError:
         return False
@@ -283,13 +292,18 @@ except Exception as exc:
 
     print_step("Systemd Services")
     socket_path = "/run/document_refinery/document_refinery.sock"
+    nginx_group_default = "www-data" if group_exists("www-data") else service_user
+    nginx_group = get_input("Nginx socket group", nginx_group_default)
+    if not group_exists(nginx_group):
+        print(f"{RED}Group '{nginx_group}' does not exist. Using '{service_user}'.{RESET}")
+        nginx_group = service_user
     gunicorn_service = f"""[Unit]
 Description=DocumentRefinery Gunicorn
 After=network.target
 
 [Service]
 User={service_user}
-Group={service_user}
+Group={nginx_group}
 WorkingDirectory={repo_root}
 EnvironmentFile={env_path}
 RuntimeDirectory=document_refinery
@@ -297,7 +311,9 @@ RuntimeDirectoryMode=0755
 ExecStart={venv_bin}/gunicorn \\
     --workers 3 \\
     --bind unix:{socket_path} \\
+    --chmod-socket 660 \\
     config.wsgi:application
+UMask=007
 Restart=on-failure
 KillSignal=SIGTERM
 
