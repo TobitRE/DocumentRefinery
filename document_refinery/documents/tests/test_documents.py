@@ -1,6 +1,7 @@
 import hashlib
 import os
 import tempfile
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -53,6 +54,25 @@ class TestDocumentUpload(TestCase):
             upload = SimpleUploadedFile("big.pdf", content, content_type="application/pdf")
             response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 413)
+
+    def test_upload_rejects_invalid_options(self):
+        content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            with patch("documents.views.start_ingestion_pipeline"):
+                response = self.client.post(
+                    "/v1/documents/",
+                    {
+                        "file": upload,
+                        "ingest": "true",
+                        "options_json": '{"max_num_pages": "ten"}',
+                    },
+                    format="multipart",
+                )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.data["error_code"], "INVALID_OPTIONS")
+            self.assertEqual(Document.objects.count(), 0)
 
 
 class TestDocumentScope(TestCase):

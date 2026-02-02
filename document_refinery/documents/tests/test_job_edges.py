@@ -1,11 +1,13 @@
-from unittest.mock import patch
+import os
+import tempfile
+from unittest.mock import ANY, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from authn.models import APIKey, Tenant
 from documents.models import Artifact, ArtifactKind, Document, IngestionJob, IngestionJobStatus, IngestionStage
-from documents.tasks import finalize_job_task
+from documents.tasks import finalize_job_task, scan_pdf_task
 
 
 class TestJobCancelSemantics(TestCase):
@@ -69,6 +71,49 @@ class TestJobCancelSemantics(TestCase):
             response = self.client.post(f"/v1/jobs/{job.id}/cancel/")
         self.assertEqual(response.status_code, 200)
         revoke_mock.assert_called_once()
+
+    def test_cancel_uses_current_task_id_from_running_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = Document(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                original_filename="sample.pdf",
+                sha256="f" * 64,
+                mime_type="application/pdf",
+                size_bytes=10,
+                storage_relpath_quarantine="pending",
+            )
+            relpath = os.path.join("uploads", "quarantine", str(self.tenant.id), f"{doc.uuid}.pdf")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_quarantine = relpath
+            doc.save()
+
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.QUEUED,
+                stage=IngestionStage.SCANNING,
+            )
+
+            with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
+                mock_scan.return_value = {abs_path: ("OK", "")}
+                scan_pdf_task.apply(args=[job.id])
+
+            job.refresh_from_db()
+            self.assertTrue(job.celery_task_id)
+
+            with patch("documents.views.current_app.control.revoke") as revoke_mock:
+                response = self.client.post(f"/v1/jobs/{job.id}/cancel/")
+            self.assertEqual(response.status_code, 200)
+            revoke_mock.assert_called_once_with(
+                job.celery_task_id,
+                terminate=True,
+                signal=ANY,
+            )
 
 
 class TestJobRetryArtifacts(TestCase):

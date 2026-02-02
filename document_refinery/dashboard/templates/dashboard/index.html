@@ -371,21 +371,85 @@
           : "No workers online.";
       }
 
+      function formatBytes(bytes) {
+        if (bytes === null || bytes === undefined) return "—";
+        const units = ["B", "KB", "MB", "GB", "TB"];
+        let idx = 0;
+        let value = bytes;
+        while (value >= 1024 && idx < units.length - 1) {
+          value /= 1024;
+          idx += 1;
+        }
+        return `${value.toFixed(1)} ${units[idx]}`;
+      }
+
+      function formatPercent(value) {
+        if (value === null || value === undefined) return "—";
+        return `${value.toFixed(1)}%`;
+      }
+
+      function formatUptime(seconds) {
+        if (!seconds && seconds !== 0) return "—";
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        if (days > 0) return `${days}d ${hours}h`;
+        if (hours > 0) return `${hours}h ${mins}m`;
+        return `${mins}m`;
+      }
+
+      function renderSystem(data) {
+        const cpu = data.cpu || {};
+        const mem = data.memory || {};
+        const disk = data.disk || {};
+        const gpu = data.gpu || {};
+        const load = cpu.loadavg ? cpu.loadavg.map((v) => v.toFixed(2)).join(", ") : "—";
+        const gpuLine = gpu.available
+          ? `gpu: ${gpu.gpus
+              .map(
+                (item) =>
+                  `${item.name} · ${item.utilization_pct}% · ${item.memory_used_mb}/${item.memory_total_mb} MB`
+              )
+              .join(" | ")}`
+          : `gpu: ${gpu.reason || "unavailable"}`;
+        const driverLine = gpu.driver_version ? `driver: ${gpu.driver_version}` : null;
+
+        fields.system.innerHTML = `
+          <div class="pill">db: ${data.checks?.db ? "ok" : "down"}</div>
+          <div class="pill">broker: ${data.checks?.broker ? "ok" : "down"}</div>
+          <div class="pill">cpu: ${cpu.count ?? "—"} cores · load ${load}</div>
+          <div class="pill">mem: ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${formatPercent(
+          mem.percent
+        )})</div>
+          <div class="pill">disk(/): ${formatBytes(
+            disk.root?.used
+          )} / ${formatBytes(disk.root?.total)} (${formatPercent(
+          disk.root?.percent
+        )})</div>
+          <div class="pill">disk(data): ${
+            disk.data_root
+              ? `${formatBytes(disk.data_root.used)} / ${formatBytes(
+                  disk.data_root.total
+                )} (${formatPercent(disk.data_root.percent)})`
+              : "n/a"
+          }</div>
+          <div class="pill">uptime: ${formatUptime(data.uptime_seconds)}</div>
+          <div class="pill">${gpuLine}</div>
+          ${driverLine ? `<div class="pill">${driverLine}</div>` : ""}
+        `;
+      }
+
       async function refresh() {
         setStatus("Loading...");
         try {
-          const [summary, workers, health, ready] = await Promise.all([
+          const [summary, workers, system] = await Promise.all([
             fetchJson("/v1/dashboard/summary"),
             fetchJson("/v1/dashboard/workers"),
-            fetch("/healthz").then((res) => res.json()),
-            fetch("/readyz").then((res) => res.json()),
+            fetch("/dashboard/system").then((res) => res.json()),
           ]);
           renderSummary(summary);
           renderWorkers(workers);
-          fields.system.innerHTML = `
-            <div class="pill">healthz: ${health.status || "unknown"}</div>
-            <div class="pill">readyz: ${ready.status || "unknown"}</div>
-          `;
+          renderSystem(system);
           setStatus("Updated just now.");
           lastUpdated.textContent = new Date().toLocaleTimeString();
         } catch (err) {

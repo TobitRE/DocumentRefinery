@@ -28,6 +28,21 @@ this section should include:
 - how to run the API server and Celery worker
 - a minimal `curl` upload example
 
+## Install script (single host)
+
+An interactive installer is available for Ubuntu-based single-host deployments.
+It assumes the repo is already cloned and you run it from within the repo.
+
+```bash
+sudo python3 deploy/install_document_refinery.py
+```
+
+Notes:
+- The virtualenv is created one level above the repo (default `../venv`).
+- The script can generate `.env` from `.env.example`, install system deps,
+  configure systemd + nginx, and optionally request TLS via certbot.
+- The dashboard includes a staff-only system stats panel at `/dashboard/`.
+
 ## Environment variables (planned)
 
 Expected configuration values (to be finalized in the implementation):

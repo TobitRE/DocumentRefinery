@@ -2,6 +2,7 @@ import hashlib
 import os
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.http import FileResponse
 from rest_framework import mixins, status, viewsets
@@ -11,6 +12,7 @@ from celery import current_app
 
 from authn.permissions import HasScope
 from authn.permissions import APIKeyRequired
+from authn.options import validate_docling_options
 
 from django.db import IntegrityError
 
@@ -124,6 +126,18 @@ class DocumentViewSet(
                 or settings.DOC_DEFAULT_OPTIONS
                 or {}
             )
+            try:
+                validate_docling_options(options_json)
+            except ValidationError as exc:
+                quarantine_path = doc.get_quarantine_path()
+                if quarantine_path and os.path.exists(quarantine_path):
+                    os.remove(quarantine_path)
+                doc.delete()
+                message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+                return Response(
+                    {"error_code": "INVALID_OPTIONS", "message": message},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             job = IngestionJob.objects.create(
                 tenant=api_key.tenant,
                 created_by_key=api_key,

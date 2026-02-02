@@ -82,6 +82,19 @@ class TestPipelineTasks(TestCase):
             self.assertEqual(doc.status, "INFECTED")
             self.assertEqual(job.status, IngestionJobStatus.QUARANTINED)
 
+    def test_scan_invalid_response_marks_failed(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+
+            with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
+                mock_scan.return_value = None
+                with self.assertRaises(RuntimeError):
+                    scan_pdf_task(job.id)
+
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.FAILED)
+            self.assertEqual(job.error_code, "CLAMAV_INVALID_RESPONSE")
+
     def test_convert_and_export_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)

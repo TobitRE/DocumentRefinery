@@ -147,6 +147,8 @@ def scan_pdf_task(self, job_id: int) -> int:
     if not job.started_at:
         job.started_at = timezone.now()
     job.status = IngestionJobStatus.RUNNING
+    if self.request.id:
+        job.celery_task_id = self.request.id
     job.save()
 
     start = time.monotonic()
@@ -159,6 +161,9 @@ def scan_pdf_task(self, job_id: int) -> int:
     except Exception as exc:
         _mark_failed(job, "CLAMAV_UNAVAILABLE", str(exc))
         raise
+    if not isinstance(results, dict):
+        _mark_failed(job, "CLAMAV_INVALID_RESPONSE", "Invalid scan response from ClamAV")
+        raise RuntimeError("ClamAV invalid response")
 
     status, reason = results.get(abs_path, ("ERROR", "No scan result"))
     if status == "FOUND":
@@ -198,6 +203,8 @@ def docling_convert_task(self, job_id: int) -> int:
         return job_id
     job.stage = IngestionStage.CONVERTING
     job.status = IngestionJobStatus.RUNNING
+    if self.request.id:
+        job.celery_task_id = self.request.id
     job.save()
 
     start = time.monotonic()
@@ -243,6 +250,8 @@ def export_artifacts_task(self, job_id: int) -> int:
         return job_id
     job.stage = IngestionStage.EXPORTING
     job.status = IngestionJobStatus.RUNNING
+    if self.request.id:
+        job.celery_task_id = self.request.id
     job.save()
 
     start = time.monotonic()
@@ -303,5 +312,7 @@ def finalize_job_task(self, job_id: int) -> int:
     job.status = IngestionJobStatus.SUCCEEDED
     job.finished_at = timezone.now()
     job.recompute_durations()
+    if self.request.id:
+        job.celery_task_id = self.request.id
     job.save()
     return job_id

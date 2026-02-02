@@ -1,4 +1,5 @@
 from django.http import JsonResponse, HttpResponse
+from django.conf import settings
 from django.utils import timezone
 from django.db import connections
 from django.db.utils import OperationalError
@@ -8,7 +9,20 @@ from django.db.models import Count
 from documents.models import IngestionJob, IngestionJobStatus
 
 
+def _require_internal_token(request):
+    token = getattr(settings, "INTERNAL_ENDPOINTS_TOKEN", "")
+    if not token:
+        return None
+    provided = request.headers.get("X-Internal-Token") or request.GET.get("token")
+    if provided != token:
+        return JsonResponse({"status": "forbidden"}, status=403)
+    return None
+
+
 def healthz(request):
+    guard = _require_internal_token(request)
+    if guard:
+        return guard
     return JsonResponse(
         {"status": "ok", "timestamp": timezone.now().isoformat()},
         status=200,
@@ -16,6 +30,9 @@ def healthz(request):
 
 
 def readyz(request):
+    guard = _require_internal_token(request)
+    if guard:
+        return guard
     checks = {"db": False, "broker": False}
 
     try:
@@ -39,6 +56,9 @@ def readyz(request):
 
 
 def metrics(request):
+    guard = _require_internal_token(request)
+    if guard:
+        return guard
     queued = IngestionJob.objects.filter(status=IngestionJobStatus.QUEUED).count()
     running = IngestionJob.objects.filter(status=IngestionJobStatus.RUNNING).count()
     failed = IngestionJob.objects.filter(status=IngestionJobStatus.FAILED).count()

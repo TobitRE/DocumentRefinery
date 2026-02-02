@@ -47,6 +47,7 @@ X_ACCEL_REDIRECT_LOCATION = os.environ.get("X_ACCEL_REDIRECT_LOCATION", "/protec
 
 CELERY_CANCEL_SIGNAL = os.environ.get("CELERY_CANCEL_SIGNAL", "SIGTERM")
 CELERY_DEFAULT_QUEUE = os.environ.get("CELERY_DEFAULT_QUEUE", "default")
+INTERNAL_ENDPOINTS_TOKEN = os.environ.get("INTERNAL_ENDPOINTS_TOKEN", "")
 
 
 # Application definition
