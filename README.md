@@ -91,6 +91,14 @@ To include `DATA_ROOT` artifacts (can be large):
 ./deploy/update_document_refinery.sh --backup --backup-data-root
 ```
 
+Note: backing up `DATA_ROOT` requires read permissions (run with sudo if needed).
+
+To update a different branch:
+
+```bash
+./deploy/update_document_refinery.sh --branch release
+```
+
 ## Environment variables
 
 Expected configuration values:

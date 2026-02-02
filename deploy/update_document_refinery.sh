@@ -17,6 +17,7 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 DO_BACKUP=1
 DO_BACKUP_DATA_ROOT=0
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
+BRANCH="${BRANCH:-main}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,6 +48,18 @@ while [[ $# -gt 0 ]]; do
       BACKUP_DIR="${1#*=}"
       shift
       ;;
+    --branch)
+      BRANCH="${2:-}"
+      if [ -z "${BRANCH}" ]; then
+        print_error "--branch requires a value"
+        exit 1
+      fi
+      shift 2
+      ;;
+    --branch=*)
+      BRANCH="${1#*=}"
+      shift
+      ;;
     *)
       print_warning "Unknown argument: $1"
       shift
@@ -75,8 +88,8 @@ fi
 
 print_status "Pulling latest changes from main..."
 git fetch origin
-git checkout main
-git pull origin main
+git checkout "${BRANCH}"
+git pull origin "${BRANCH}"
 
 print_status "Installing/updating Python dependencies..."
 ${PIP_BIN} install -r requirements.txt
@@ -90,6 +103,10 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
   if [ -z "${DATA_ROOT}" ]; then
     DATA_ROOT="/var/lib/docling_service"
   fi
+  DATA_ROOT="${DATA_ROOT%\"}"
+  DATA_ROOT="${DATA_ROOT#\"}"
+  DATA_ROOT="${DATA_ROOT%\'}"
+  DATA_ROOT="${DATA_ROOT#\'}"
   TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
   mkdir -p "${BACKUP_DIR}"
   if [ -f ".env" ]; then
@@ -105,19 +122,33 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
   if [ "${DO_BACKUP_DATA_ROOT}" -eq 1 ]; then
     if [ -d "${DATA_ROOT}" ]; then
       print_status "Backing up DATA_ROOT (${DATA_ROOT})..."
-      sudo tar -czf "${BACKUP_DIR}/data_root_${TIMESTAMP}.tar.gz" -C "${DATA_ROOT}" .
+      if [ "$(id -u)" -eq 0 ] || [ -r "${DATA_ROOT}" ]; then
+        tar -czf "${BACKUP_DIR}/data_root_${TIMESTAMP}.tar.gz" -C "${DATA_ROOT}" .
+      else
+        print_warning "DATA_ROOT not readable; run with sudo to include it"
+      fi
     else
       print_warning "DATA_ROOT not found; skipping data root backup"
     fi
   fi
+  print_status "Backup written to ${BACKUP_DIR}"
 fi
 
 print_status "Running migrations..."
 ${PY_BIN} document_refinery/manage.py migrate
 
 print_status "Restarting services..."
-sudo systemctl restart gunicorn.service
-sudo systemctl restart celery-worker.service
+if sudo systemctl list-unit-files | grep -q '^gunicorn.service'; then
+  sudo systemctl restart gunicorn.service
+else
+  print_warning "gunicorn.service not found"
+fi
+
+if sudo systemctl list-unit-files | grep -q '^celery-worker.service'; then
+  sudo systemctl restart celery-worker.service
+else
+  print_warning "celery-worker.service not found"
+fi
 
 if sudo systemctl list-unit-files | grep -q '^celery-beat.service'; then
   sudo systemctl restart celery-beat.service || print_warning "celery-beat restart failed"
