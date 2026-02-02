@@ -157,6 +157,9 @@ fi
 print_status "Running migrations..."
 ${PY_BIN} document_refinery/manage.py migrate
 
+print_status "Collecting static files..."
+${PY_BIN} document_refinery/manage.py collectstatic --noinput
+
 print_status "Restarting services..."
 if sudo systemctl list-unit-files | grep -q '^gunicorn.service'; then
   sudo systemctl restart gunicorn.service

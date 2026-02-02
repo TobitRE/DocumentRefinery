@@ -57,6 +57,7 @@ Notes:
 - The virtualenv is created one level above the repo (default `../venv`).
 - The script can generate `.env` from `.env.example`, install system deps,
   configure systemd + nginx, and optionally request TLS via certbot.
+- It configures `STATIC_ROOT` and runs `collectstatic` during install.
 - It installs and enables `clamav-freshclam` for signature updates.
 - It can run a Docling smoke test and will prompt for an email-based superuser.
 - It can configure PostgreSQL and set `DATABASE_URL` when requested.
@@ -115,6 +116,7 @@ Expected configuration values:
 - `DJANGO_SETTINGS_MODULE`
 - `SECRET_KEY`
 - `DATA_ROOT`
+- `STATIC_ROOT`
 - `UPLOAD_MAX_SIZE_MB`
 - `MAX_PAGES`
 - `CELERY_BROKER_URL`

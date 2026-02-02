@@ -334,6 +334,9 @@ except Exception as exc:
         allowed_hosts_default = domain_name or "localhost,127.0.0.1"
         allowed_hosts = get_input("ALLOWED_HOSTS (comma-separated)", allowed_hosts_default)
         data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
+        static_root = get_input(
+            "STATIC_ROOT", f"{repo_root.parent}/staticfiles"
+        )
         broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
         database_url = None
@@ -418,6 +421,7 @@ except Exception as exc:
                 "DEBUG": "true" if debug_mode else "false",
                 "ALLOWED_HOSTS": allowed_hosts,
                 "DATA_ROOT": data_root,
+                "STATIC_ROOT": static_root,
                 "CELERY_BROKER_URL": broker_url,
                 "INTERNAL_ENDPOINTS_TOKEN": internal_token,
             }
@@ -431,6 +435,9 @@ except Exception as exc:
             data_root = env_data_root
         else:
             data_root = "/var/lib/docling_service"
+    static_root = sanitize_env_value(env_values.get("STATIC_ROOT"))
+    if not static_root:
+        static_root = str(repo_root.parent / "staticfiles")
 
     run_cmd(["chown", f"{service_user}:{service_user}", str(env_path)])
 
@@ -443,12 +450,20 @@ except Exception as exc:
     Path(data_root).mkdir(parents=True, exist_ok=True)
     run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", data_root])
     run_cmd(["chmod", "-R", "g+rx", data_root])
+    Path(static_root).mkdir(parents=True, exist_ok=True)
+    run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", static_root])
+    run_cmd(["chmod", "-R", "g+rx", static_root])
 
     print_step("Database")
     run_cmd(
         [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "migrate"],
         required=True,
     )
+    if ask_user("Collect static files now?", default=True):
+        run_cmd(
+            [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "collectstatic", "--noinput"],
+            required=True,
+        )
     if ask_user("Create Django superuser now? (use email as username)", default=False):
         admin_email = get_input("Admin email (used as username)")
         cmd = [
@@ -478,7 +493,6 @@ RuntimeDirectoryMode=0755
 ExecStart={venv_bin}/gunicorn \\
     --workers 3 \\
     --bind unix:{socket_path} \\
-    --chmod-socket 660 \\
     config.wsgi:application
 UMask=007
 NoNewPrivileges=true
@@ -583,6 +597,10 @@ WantedBy=multi-user.target
     server_name {server_name};
 
     client_max_body_size 60m;
+
+    location /static/ {{
+        alias {static_root}/;
+    }}
 
     location / {{
         proxy_pass http://unix:{socket_path};
