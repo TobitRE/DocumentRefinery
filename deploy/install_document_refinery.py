@@ -5,6 +5,7 @@ import os
 import pwd
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -112,6 +113,38 @@ def ensure_user(username: str) -> None:
     else:
         print(f"{RED}Cannot continue without a valid service user.{RESET}")
         sys.exit(1)
+
+
+def ensure_nginx_traversal(path: Path, group: str) -> None:
+    try:
+        group_gid = grp.getgrnam(group).gr_gid
+    except KeyError:
+        group_gid = None
+
+    missing = []
+    for parent in path.resolve().parents:
+        if parent == Path("/"):
+            break
+        try:
+            st = parent.stat()
+        except OSError:
+            continue
+        mode = stat.S_IMODE(st.st_mode)
+        group_ok = group_gid is not None and st.st_gid == group_gid and (mode & stat.S_IXGRP)
+        other_ok = bool(mode & stat.S_IXOTH)
+        if not (group_ok or other_ok):
+            missing.append(parent)
+
+    if not missing:
+        return
+
+    print(
+        f"{YELLOW}Nginx may not traverse parent directories for {path}.{RESET}\n"
+        f"{YELLOW}Missing execute bit on: {', '.join(str(p) for p in missing)}{RESET}"
+    )
+    if ask_user("Add o+x to these parent directories?", default=True):
+        for parent in missing:
+            run_cmd(["chmod", "o+x", str(parent)])
 
 
 def render_env(template_text: str, overrides: dict[str, str]) -> str:
@@ -522,6 +555,7 @@ except Exception as exc:
         Path(static_root).mkdir(parents=True, exist_ok=True)
         run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", static_root])
         run_cmd(["chmod", "-R", "g+rx", static_root])
+        ensure_nginx_traversal(Path(static_root), nginx_group)
 
         print_step("Database")
         if not skip_migrate:
