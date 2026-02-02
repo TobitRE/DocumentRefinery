@@ -7,12 +7,14 @@ from celery import current_app
 from django.conf import settings
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db import connections
+from django.db.models import Count
 from django.db.utils import OperationalError
 from django.http import JsonResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.generic import TemplateView
 
+from documents.models import IngestionJob, IngestionJobStatus
 
 @method_decorator(staff_member_required, name="dispatch")
 class DashboardPageView(TemplateView):
@@ -160,9 +162,47 @@ def system_status(request):
         except OSError:
             loadavg = None
 
+    metrics_payload = {"jobs": None, "text": "metrics unavailable"}
+    if checks.get("db"):
+        try:
+            status_counts = (
+                IngestionJob.objects.values("status")
+                .annotate(count=Count("id"))
+            )
+            counts = {entry["status"]: entry["count"] for entry in status_counts}
+            job_counts = {
+                "queued": counts.get(IngestionJobStatus.QUEUED, 0),
+                "running": counts.get(IngestionJobStatus.RUNNING, 0),
+                "failed": counts.get(IngestionJobStatus.FAILED, 0),
+                "succeeded": counts.get(IngestionJobStatus.SUCCEEDED, 0),
+            }
+            metrics_lines = [
+                "# HELP docling_jobs_total Total jobs by status.",
+                "# TYPE docling_jobs_total gauge",
+                f'docling_jobs_total{{status="queued"}} {job_counts["queued"]}',
+                f'docling_jobs_total{{status="running"}} {job_counts["running"]}',
+                f'docling_jobs_total{{status="failed"}} {job_counts["failed"]}',
+                f'docling_jobs_total{{status="succeeded"}} {job_counts["succeeded"]}',
+            ]
+            metrics_payload = {
+                "jobs": job_counts,
+                "text": "\n".join(metrics_lines) + "\n",
+            }
+        except Exception as exc:
+            metrics_payload = {
+                "jobs": None,
+                "text": f"metrics unavailable: {exc.__class__.__name__}",
+            }
+    else:
+        metrics_payload = {
+            "jobs": None,
+            "text": "metrics unavailable: db down",
+        }
+
     payload = {
         "timestamp": timezone.now().isoformat(),
         "checks": checks,
+        "metrics": metrics_payload,
         "cpu": {
             "count": os.cpu_count(),
             "model": _read_cpu_model(),
