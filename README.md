@@ -69,6 +69,18 @@ Resume mode (skip destructive steps by default):
 sudo python3 deploy/install_document_refinery.py --resume
 ```
 
+Only overwrite nginx config (reads existing `.env` for `STATIC_ROOT`/`DATA_ROOT`):
+
+```bash
+sudo python3 deploy/install_document_refinery.py --only-nginx
+```
+
+Skip migrations during install (e.g. for read-only DB access):
+
+```bash
+sudo python3 deploy/install_document_refinery.py --skip-migrate
+```
+
 ## Update script
 
 For deployments using systemd + nginx, you can update in-place from the repo root:

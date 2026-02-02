@@ -157,94 +157,111 @@ def sanitize_env_value(value: str | None) -> str | None:
 def main() -> None:
     require_root()
     resume = "--resume" in sys.argv
+    only_nginx = "--only-nginx" in sys.argv
+    skip_migrate = "--skip-migrate" in sys.argv or only_nginx
 
     repo_root = find_repo_root(Path(__file__).resolve())
+    project_dir = repo_root / "document_refinery"
     repo_owner = pwd.getpwuid(repo_root.stat().st_uid).pw_name
+    socket_path = "/run/document_refinery/document_refinery.sock"
+    install_fail2ban = False
+    install_certbot = False
+    install_postgres = False
+    venv_dir = None
+    venv_bin = None
+    venv_pip = None
+    venv_python = None
 
     print(f"{GREEN}=== DocumentRefinery Install Script ==={RESET}")
     print(f"Repo: {repo_root}")
     if resume:
         print(f"{YELLOW}Resume mode enabled: skipping destructive steps by default.{RESET}")
+    if only_nginx:
+        print(f"{YELLOW}Only-nginx mode enabled: other steps will be skipped.{RESET}")
 
-    print_step("Service User")
-    service_user = get_input("Service user", repo_owner)
-    ensure_user(service_user)
-    if service_user != repo_owner:
-        print(
-            f"{YELLOW}Repo owner is '{repo_owner}'. Services will run as '{service_user}'.{RESET}"
+    if not only_nginx:
+        print_step("Service User")
+        service_user = get_input("Service user", repo_owner)
+        ensure_user(service_user)
+        if service_user != repo_owner:
+            print(
+                f"{YELLOW}Repo owner is '{repo_owner}'. Services will run as '{service_user}'.{RESET}"
+            )
+            if ask_user(f"Change ownership of repo to '{service_user}'?", default=False):
+                run_cmd(["chown", "-R", f"{service_user}:{service_user}", str(repo_root)])
+
+        print_step("Virtual Environment")
+        default_venv = repo_root.parent / "venv"
+        venv_dir = Path(get_input("Venv directory (one level above repo)", str(default_venv)))
+        venv_dir = venv_dir.expanduser().resolve()
+        venv_bin = venv_dir / "bin"
+        venv_pip = venv_bin / "pip"
+        venv_python = venv_bin / "python"
+
+    if not only_nginx:
+        print_step("System Dependencies")
+        deps = [
+            "python3-venv",
+            "python3-pip",
+            "nginx",
+            "redis-server",
+            "clamav-daemon",
+            "clamav-freshclam",
+        ]
+        install_packages = ask_user(
+            "Install/ensure system packages?", default=not resume and not only_nginx
         )
-        if ask_user(f"Change ownership of repo to '{service_user}'?", default=False):
-            run_cmd(["chown", "-R", f"{service_user}:{service_user}", str(repo_root)])
+        if install_packages:
+            if ask_user("Install OCR deps (tesseract-ocr, libgl1)?", default=not resume):
+                deps.extend(["tesseract-ocr", "libgl1"])
+            if ask_user("Install UFW firewall package?", default=False):
+                deps.append("ufw")
+            if ask_user("Install PostgreSQL server?", default=False):
+                deps.extend(["postgresql", "postgresql-contrib"])
+                install_postgres = True
+            if ask_user("Install fail2ban?", default=False):
+                deps.append("fail2ban")
+                install_fail2ban = True
+            if ask_user("Install certbot (for TLS)?", default=False):
+                deps.extend(["certbot", "python3-certbot-nginx"])
+                install_certbot = True
+            if ask_user(f"Install packages: {' '.join(deps)}?", default=True):
+                run_cmd(["apt", "update"], required=True)
+                run_cmd(["apt", "install", "-y", *deps], required=True)
 
-    print_step("Virtual Environment")
-    default_venv = repo_root.parent / "venv"
-    venv_dir = Path(get_input("Venv directory (one level above repo)", str(default_venv)))
-    venv_dir = venv_dir.expanduser().resolve()
-    venv_bin = venv_dir / "bin"
-    venv_pip = venv_bin / "pip"
-    venv_python = venv_bin / "python"
+    if not only_nginx:
+        run_cmd(["systemctl", "enable", "--now", "redis-server"], required=True)
+        run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
+        run_cmd(["systemctl", "enable", "--now", "clamav-freshclam"], required=True)
+        if ask_user("Run freshclam update now?", default=False):
+            run_cmd(["systemctl", "stop", "clamav-freshclam"])
+            run_cmd(["freshclam"])
+            run_cmd(["systemctl", "start", "clamav-freshclam"], required=True)
+        if install_fail2ban:
+            run_cmd(["systemctl", "enable", "--now", "fail2ban"], required=True)
+        if install_postgres:
+            run_cmd(["systemctl", "enable", "--now", "postgresql"], required=True)
+        run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
 
-    print_step("System Dependencies")
-    deps = [
-        "python3-venv",
-        "python3-pip",
-        "nginx",
-        "redis-server",
-        "clamav-daemon",
-        "clamav-freshclam",
-    ]
-    install_fail2ban = False
-    install_certbot = False
-    install_postgres = False
-    install_packages = ask_user("Install/ensure system packages?", default=not resume)
-    if install_packages:
-        if ask_user("Install OCR deps (tesseract-ocr, libgl1)?", default=not resume):
-            deps.extend(["tesseract-ocr", "libgl1"])
-        if ask_user("Install UFW firewall package?", default=False):
-            deps.append("ufw")
-        if ask_user("Install PostgreSQL server?", default=False):
-            deps.extend(["postgresql", "postgresql-contrib"])
-            install_postgres = True
-        if ask_user("Install fail2ban?", default=False):
-            deps.append("fail2ban")
-            install_fail2ban = True
-        if ask_user("Install certbot (for TLS)?", default=False):
-            deps.extend(["certbot", "python3-certbot-nginx"])
-            install_certbot = True
-        if ask_user(f"Install packages: {' '.join(deps)}?", default=True):
-            run_cmd(["apt", "update"], required=True)
-            run_cmd(["apt", "install", "-y", *deps], required=True)
+    if not only_nginx:
+        print_step("Python Environment")
+        if not venv_dir.exists():
+            if ask_user(f"Create venv at {venv_dir}?", default=True):
+                run_cmd([sys.executable, "-m", "venv", str(venv_dir)])
+        if not venv_pip.exists():
+            print(f"{RED}pip not found in {venv_pip}. Aborting.{RESET}")
+            sys.exit(1)
+        if ask_user("Install/update Python dependencies?", default=not resume):
+            run_cmd([str(venv_pip), "install", "--upgrade", "pip"], required=True)
+            run_cmd(
+                [str(venv_pip), "install", "-r", str(repo_root / "requirements.txt")],
+                required=True,
+            )
 
-    run_cmd(["systemctl", "enable", "--now", "redis-server"], required=True)
-    run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
-    run_cmd(["systemctl", "enable", "--now", "clamav-freshclam"], required=True)
-    if ask_user("Run freshclam update now?", default=False):
-        run_cmd(["systemctl", "stop", "clamav-freshclam"])
-        run_cmd(["freshclam"])
-        run_cmd(["systemctl", "start", "clamav-freshclam"], required=True)
-    if install_fail2ban:
-        run_cmd(["systemctl", "enable", "--now", "fail2ban"], required=True)
-    if install_postgres:
-        run_cmd(["systemctl", "enable", "--now", "postgresql"], required=True)
-    run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
-
-    print_step("Python Environment")
-    if not venv_dir.exists():
-        if ask_user(f"Create venv at {venv_dir}?", default=True):
-            run_cmd([sys.executable, "-m", "venv", str(venv_dir)])
-    if not venv_pip.exists():
-        print(f"{RED}pip not found in {venv_pip}. Aborting.{RESET}")
-        sys.exit(1)
-    if ask_user("Install/update Python dependencies?", default=not resume):
-        run_cmd([str(venv_pip), "install", "--upgrade", "pip"], required=True)
-        run_cmd(
-            [str(venv_pip), "install", "-r", str(repo_root / "requirements.txt")],
-            required=True,
-        )
-
-    print_step("Docling Smoke Test")
-    if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=not resume):
-        smoke_code = r'''
+    if not only_nginx:
+        print_step("Docling Smoke Test")
+        if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=not resume):
+            smoke_code = r'''
 import shutil
 import sys
 import tempfile
@@ -306,7 +323,7 @@ try:
 except Exception as exc:
     print(f"PyTorch CUDA check skipped: {exc}")
 '''
-        run_cmd([str(venv_python), "-c", smoke_code])
+            run_cmd([str(venv_python), "-c", smoke_code])
 
     print_step("Environment Configuration")
     env_example = repo_root / ".env.example"
@@ -316,13 +333,18 @@ except Exception as exc:
         sys.exit(1)
     env_values = read_env(env_path) if env_path.exists() else {}
     data_root = None
+    static_root = None
 
     domain_name = ""
-    if ask_user("Do you have a domain for Nginx?", default=False):
+    if not only_nginx and ask_user("Do you have a domain for Nginx?", default=False):
         domain_name = get_input("Domain name (example: docs.example.com)")
 
     if env_path.exists() and resume:
         print(f"{YELLOW}Using existing .env in resume mode.{RESET}")
+    elif only_nginx:
+        if not env_path.exists():
+            print(f"{RED}Missing .env; cannot continue in only-nginx mode.{RESET}")
+            sys.exit(1)
     else:
         if env_path.exists():
             if not ask_user(f"{env_path} exists. Overwrite?", default=False):
@@ -334,9 +356,7 @@ except Exception as exc:
         allowed_hosts_default = domain_name or "localhost,127.0.0.1"
         allowed_hosts = get_input("ALLOWED_HOSTS (comma-separated)", allowed_hosts_default)
         data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
-        static_root = get_input(
-            "STATIC_ROOT", f"{repo_root.parent}/staticfiles"
-        )
+        static_root = get_input("STATIC_ROOT", f"{repo_root.parent}/staticfiles")
         broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
         database_url = None
@@ -435,58 +455,67 @@ except Exception as exc:
             data_root = env_data_root
         else:
             data_root = "/var/lib/docling_service"
-    static_root = sanitize_env_value(env_values.get("STATIC_ROOT"))
     if not static_root:
-        static_root = str(repo_root.parent / "staticfiles")
+        env_static_root = sanitize_env_value(env_values.get("STATIC_ROOT"))
+        if env_static_root and not env_static_root.startswith("$"):
+            static_root = env_static_root
+        else:
+            static_root = str(repo_root.parent / "staticfiles")
 
-    run_cmd(["chown", f"{service_user}:{service_user}", str(env_path)])
+    if only_nginx:
+        allowed_hosts_value = sanitize_env_value(env_values.get("ALLOWED_HOSTS")) or "_"
+        default_host = allowed_hosts_value.split(",")[0].strip() or "_"
+        if not domain_name:
+            domain_name = get_input("Domain name for Nginx", default_host)
+    else:
+        run_cmd(["chown", f"{service_user}:{service_user}", str(env_path)])
 
-    print_step("Data Directory")
-    nginx_group_default = "www-data" if group_exists("www-data") else service_user
-    nginx_group = get_input("Nginx file/socket group", nginx_group_default)
-    if not group_exists(nginx_group):
-        print(f"{RED}Group '{nginx_group}' does not exist. Using '{service_user}'.{RESET}")
-        nginx_group = service_user
-    Path(data_root).mkdir(parents=True, exist_ok=True)
-    run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", data_root])
-    run_cmd(["chmod", "-R", "g+rx", data_root])
-    Path(static_root).mkdir(parents=True, exist_ok=True)
-    run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", static_root])
-    run_cmd(["chmod", "-R", "g+rx", static_root])
+        print_step("Data Directory")
+        nginx_group_default = "www-data" if group_exists("www-data") else service_user
+        nginx_group = get_input("Nginx file/socket group", nginx_group_default)
+        if not group_exists(nginx_group):
+            print(f"{RED}Group '{nginx_group}' does not exist. Using '{service_user}'.{RESET}")
+            nginx_group = service_user
+        Path(data_root).mkdir(parents=True, exist_ok=True)
+        run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", data_root])
+        run_cmd(["chmod", "-R", "g+rx", data_root])
+        Path(static_root).mkdir(parents=True, exist_ok=True)
+        run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", static_root])
+        run_cmd(["chmod", "-R", "g+rx", static_root])
 
-    print_step("Database")
-    run_cmd(
-        [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "migrate"],
-        required=True,
-    )
-    if ask_user("Collect static files now?", default=True):
-        run_cmd(
-            [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "collectstatic", "--noinput"],
-            required=True,
-        )
-    if ask_user("Create Django superuser now? (use email as username)", default=False):
-        admin_email = get_input("Admin email (used as username)")
-        cmd = [
-            str(venv_python),
-            str(repo_root / "document_refinery" / "manage.py"),
-            "createsuperuser",
-            "--username",
-            admin_email,
-            "--email",
-            admin_email,
-        ]
-        run_cmd(cmd)
+        print_step("Database")
+        if not skip_migrate:
+            run_cmd(
+                [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "migrate"],
+                required=True,
+            )
+        if ask_user("Collect static files now?", default=True):
+            run_cmd(
+                [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "collectstatic", "--noinput"],
+                required=True,
+            )
+        if ask_user("Create Django superuser now? (use email as username)", default=False):
+            admin_email = get_input("Admin email (used as username)")
+            cmd = [
+                str(venv_python),
+                str(repo_root / "document_refinery" / "manage.py"),
+                "createsuperuser",
+                "--username",
+                admin_email,
+                "--email",
+                admin_email,
+            ]
+            run_cmd(cmd)
 
-    print_step("Systemd Services")
-    socket_path = "/run/document_refinery/document_refinery.sock"
-    gunicorn_service = f"""[Unit]
+        print_step("Systemd Services")
+        gunicorn_service = f"""[Unit]
 Description=DocumentRefinery Gunicorn
 After=network.target
 
 [Service]
 User={service_user}
 Group={nginx_group}
-WorkingDirectory={repo_root}
+WorkingDirectory={project_dir}
 EnvironmentFile={env_path}
 RuntimeDirectory=document_refinery
 RuntimeDirectoryMode=0755
@@ -514,14 +543,14 @@ KillSignal=SIGTERM
 WantedBy=multi-user.target
 """
 
-    celery_worker_service = f"""[Unit]
+        celery_worker_service = f"""[Unit]
 Description=DocumentRefinery Celery Worker
 After=network.target
 
 [Service]
 User={service_user}
 Group={nginx_group}
-WorkingDirectory={repo_root}
+WorkingDirectory={project_dir}
 EnvironmentFile={env_path}
 ExecStart={venv_bin}/celery -A config worker --loglevel=INFO
 NoNewPrivileges=true
@@ -543,14 +572,14 @@ KillSignal=SIGTERM
 WantedBy=multi-user.target
 """
 
-    celery_beat_service = f"""[Unit]
+        celery_beat_service = f"""[Unit]
 Description=DocumentRefinery Celery Beat
 After=network.target
 
 [Service]
 User={service_user}
 Group={nginx_group}
-WorkingDirectory={repo_root}
+WorkingDirectory={project_dir}
 EnvironmentFile={env_path}
 ExecStart={venv_bin}/celery -A config beat --loglevel=INFO
 NoNewPrivileges=true
@@ -572,23 +601,25 @@ KillSignal=SIGTERM
 WantedBy=multi-user.target
 """
 
-    units = {
-        "gunicorn.service": gunicorn_service,
-        "celery-worker.service": celery_worker_service,
-        "celery-beat.service": celery_beat_service,
-    }
-    for name, content in units.items():
-        unit_path = Path("/etc/systemd/system") / name
-        if unit_path.exists():
-            if not ask_user(f"{unit_path} exists. Overwrite?", default=False if resume else False):
-                continue
-        write_file(unit_path, content)
+        units = {
+            "gunicorn.service": gunicorn_service,
+            "celery-worker.service": celery_worker_service,
+            "celery-beat.service": celery_beat_service,
+        }
+        for name, content in units.items():
+            unit_path = Path("/etc/systemd/system") / name
+            if unit_path.exists():
+                if not ask_user(
+                    f"{unit_path} exists. Overwrite?", default=False if resume else False
+                ):
+                    continue
+            write_file(unit_path, content)
 
-    run_cmd(["systemctl", "daemon-reload"], required=True)
-    run_cmd(["systemctl", "enable", "--now", "gunicorn.service"], required=True)
-    run_cmd(["systemctl", "enable", "--now", "celery-worker.service"], required=True)
-    if ask_user("Enable celery-beat.service?", default=False):
-        run_cmd(["systemctl", "enable", "--now", "celery-beat.service"], required=True)
+        run_cmd(["systemctl", "daemon-reload"], required=True)
+        run_cmd(["systemctl", "enable", "--now", "gunicorn.service"], required=True)
+        run_cmd(["systemctl", "enable", "--now", "celery-worker.service"], required=True)
+        if ask_user("Enable celery-beat.service?", default=False):
+            run_cmd(["systemctl", "enable", "--now", "celery-beat.service"], required=True)
 
     print_step("Nginx")
     server_name = domain_name if domain_name else "_"
@@ -633,41 +664,43 @@ WantedBy=multi-user.target
     run_cmd(["nginx", "-t"], required=True)
     run_cmd(["systemctl", "reload", "nginx"], required=True)
 
-    print_step("Firewall")
-    if shutil.which("ufw") and ask_user("Configure UFW?", default=False):
-        run_cmd(["ufw", "allow", "OpenSSH"])
-        run_cmd(["ufw", "allow", "22/tcp"])
-        run_cmd(["ufw", "allow", "Nginx Full"])
-        run_cmd("echo 'y' | ufw enable", shell=True)
+    if not only_nginx:
+        print_step("Firewall")
+        if shutil.which("ufw") and ask_user("Configure UFW?", default=False):
+            run_cmd(["ufw", "allow", "OpenSSH"])
+            run_cmd(["ufw", "allow", "22/tcp"])
+            run_cmd(["ufw", "allow", "Nginx Full"])
+            run_cmd("echo 'y' | ufw enable", shell=True)
 
-    print_step("TLS")
-    certbot_available = install_certbot or shutil.which("certbot")
-    if domain_name and certbot_available:
-        if ask_user("Request TLS certificate with certbot?", default=False if resume else True):
-            email = get_input("Certbot email")
-            run_cmd(
-                [
-                    "certbot",
-                    "--nginx",
-                    "-d",
-                    domain_name,
-                    "--agree-tos",
-                    "--email",
-                    email,
-                    "--no-eff-email",
-                ]
-            )
+        print_step("TLS")
+        certbot_available = install_certbot or shutil.which("certbot")
+        if domain_name and certbot_available:
+            if ask_user("Request TLS certificate with certbot?", default=False if resume else True):
+                email = get_input("Certbot email")
+                run_cmd(
+                    [
+                        "certbot",
+                        "--nginx",
+                        "-d",
+                        domain_name,
+                        "--agree-tos",
+                        "--email",
+                        email,
+                        "--no-eff-email",
+                    ]
+                )
 
-    print_step("Verification")
-    if domain_name:
-        print(f"{GREEN}Try: https://{domain_name}/healthz{RESET}")
-    else:
-        print(f"{GREEN}Try: http://<server-ip>/healthz{RESET}")
-    print(f"{GREEN}Service status: systemctl status gunicorn.service{RESET}")
+        print_step("Verification")
+        if domain_name:
+            print(f"{GREEN}Try: https://{domain_name}/healthz{RESET}")
+        else:
+            print(f"{GREEN}Try: http://<server-ip>/healthz{RESET}")
+        print(f"{GREEN}Service status: systemctl status gunicorn.service{RESET}")
 
     print_step("Done")
     print(f"Repo: {repo_root}")
-    print(f"Venv: {venv_dir}")
+    if venv_dir:
+        print(f"Venv: {venv_dir}")
     print(f"Data root: {data_root}")
 
 

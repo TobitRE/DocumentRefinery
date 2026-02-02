@@ -131,6 +131,7 @@
       .stat {
         font-size: 30px;
         font-weight: 700;
+        font-variant-numeric: tabular-nums;
       }
 
       .muted {
@@ -153,6 +154,18 @@
         background: #fff1df;
         border: 1px solid #f0d9c1;
         font-size: 13px;
+      }
+
+      .metrics {
+        margin: 0;
+        padding: 12px;
+        border-radius: 12px;
+        background: #fbf4ea;
+        border: 1px dashed #eadfce;
+        font-family: "IBM Plex Mono", "Courier New", monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
       }
 
       .status {
@@ -189,7 +202,7 @@
     <header>
       <div class="title-block">
         <h1>Document Refinery</h1>
-        <p>Operational dashboard — scoped by API key.</p>
+        <p>Staff dashboard — API key scopes workload data.</p>
       </div>
       <div class="key-panel card">
         <label for="apiKeyInput">API key</label>
@@ -251,9 +264,10 @@
         <div class="card">
           <h3>System status</h3>
           <div class="list" id="systemStatus">—</div>
-          <div class="key-actions" style="margin-top: 12px;">
-            <a class="pill" href="/metrics" target="_blank" rel="noopener">Open metrics</a>
-          </div>
+        </div>
+        <div class="card">
+          <h3>Metrics (internal)</h3>
+          <pre class="metrics" id="metricsText">—</pre>
         </div>
       </section>
 
@@ -289,6 +303,7 @@
         workers: document.getElementById("workerList"),
         system: document.getElementById("systemStatus"),
         failures: document.getElementById("recentFailures"),
+        metrics: document.getElementById("metricsText"),
       };
 
       function setStatus(message, isError = false) {
@@ -437,6 +452,7 @@
           <div class="pill">${gpuLine}</div>
           ${driverLine ? `<div class="pill">${driverLine}</div>` : ""}
         `;
+        fields.metrics.textContent = data.metrics?.text || "—";
       }
 
       async function refresh() {
