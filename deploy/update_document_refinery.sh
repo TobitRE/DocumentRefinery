@@ -13,6 +13,12 @@ NC='\033[0m'
 print_status() { echo -e "${GREEN}[INFO]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+has_unit() {
+  local unit="$1"
+  local state
+  state=$(systemctl show -p LoadState --value "${unit}" 2>/dev/null || true)
+  [ "${state}" = "loaded" ]
+}
 
 DO_BACKUP=1
 DO_BACKUP_DATA_ROOT=0
@@ -161,19 +167,19 @@ print_status "Collecting static files..."
 ${PY_BIN} document_refinery/manage.py collectstatic --noinput
 
 print_status "Restarting services..."
-if sudo systemctl list-unit-files | grep -q '^gunicorn'; then
+if has_unit "gunicorn.service"; then
   sudo systemctl restart gunicorn
 else
   print_warning "gunicorn service not found"
 fi
 
-if sudo systemctl list-unit-files | grep -q '^celery-worker'; then
+if has_unit "celery-worker.service"; then
   sudo systemctl restart celery-worker
 else
   print_warning "celery-worker service not found"
 fi
 
-if sudo systemctl list-unit-files | grep -q '^celery-beat'; then
+if has_unit "celery-beat.service"; then
   sudo systemctl restart celery-beat || print_warning "celery-beat restart failed"
 fi
 
