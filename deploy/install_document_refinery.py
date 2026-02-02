@@ -44,7 +44,7 @@ def get_input(prompt: str, default: str | None = None) -> str:
     return res or (default or "")
 
 
-def run_cmd(command, shell: bool = False) -> bool:
+def run_cmd(command, shell: bool = False, required: bool = False) -> bool:
     try:
         printable = command if isinstance(command, str) else " ".join(command)
         print(f"Executing: {GREEN}{printable}{RESET}")
@@ -52,6 +52,9 @@ def run_cmd(command, shell: bool = False) -> bool:
         return True
     except subprocess.CalledProcessError as exc:
         print(f"{RED}Error: {exc}{RESET}")
+        if required:
+            print(f"{RED}Aborting due to failed command.{RESET}")
+            sys.exit(1)
         return False
 
 
@@ -167,12 +170,12 @@ def main() -> None:
         deps.extend(["certbot", "python3-certbot-nginx"])
         install_certbot = True
     if ask_user(f"Install packages: {' '.join(deps)}?", default=True):
-        run_cmd(["apt", "update"])
-        run_cmd(["apt", "install", "-y", *deps])
+        run_cmd(["apt", "update"], required=True)
+        run_cmd(["apt", "install", "-y", *deps], required=True)
 
-    run_cmd(["systemctl", "enable", "--now", "redis-server"])
-    run_cmd(["systemctl", "enable", "--now", "clamav-daemon"])
-    run_cmd(["systemctl", "enable", "--now", "nginx"])
+    run_cmd(["systemctl", "enable", "--now", "redis-server"], required=True)
+    run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
+    run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
 
     print_step("Python Environment")
     if not venv_dir.exists():
@@ -181,8 +184,8 @@ def main() -> None:
     if not venv_pip.exists():
         print(f"{RED}pip not found in {venv_pip}. Aborting.{RESET}")
         sys.exit(1)
-    run_cmd([str(venv_pip), "install", "--upgrade", "pip"])
-    run_cmd([str(venv_pip), "install", "-r", str(repo_root / "requirements.txt")])
+    run_cmd([str(venv_pip), "install", "--upgrade", "pip"], required=True)
+    run_cmd([str(venv_pip), "install", "-r", str(repo_root / "requirements.txt")], required=True)
 
     print_step("Docling Smoke Test")
     if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=True):
@@ -286,7 +289,10 @@ except Exception as exc:
     run_cmd(["chown", "-R", f"{service_user}:{service_user}", data_root])
 
     print_step("Database")
-    run_cmd([str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "migrate"])
+    run_cmd(
+        [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "migrate"],
+        required=True,
+    )
     if ask_user("Create Django superuser now?", default=False):
         run_cmd([str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "createsuperuser"])
 
@@ -367,11 +373,11 @@ WantedBy=multi-user.target
                 continue
         write_file(unit_path, content)
 
-    run_cmd(["systemctl", "daemon-reload"])
-    run_cmd(["systemctl", "enable", "--now", "gunicorn.service"])
-    run_cmd(["systemctl", "enable", "--now", "celery-worker.service"])
+    run_cmd(["systemctl", "daemon-reload"], required=True)
+    run_cmd(["systemctl", "enable", "--now", "gunicorn.service"], required=True)
+    run_cmd(["systemctl", "enable", "--now", "celery-worker.service"], required=True)
     if ask_user("Enable celery-beat.service?", default=False):
-        run_cmd(["systemctl", "enable", "--now", "celery-beat.service"])
+        run_cmd(["systemctl", "enable", "--now", "celery-beat.service"], required=True)
 
     print_step("Nginx")
     server_name = domain_name if domain_name else "_"
@@ -409,8 +415,8 @@ WantedBy=multi-user.target
     if default_site.exists():
         if ask_user("Remove default nginx site?", default=True):
             default_site.unlink()
-    run_cmd(["nginx", "-t"])
-    run_cmd(["systemctl", "reload", "nginx"])
+    run_cmd(["nginx", "-t"], required=True)
+    run_cmd(["systemctl", "reload", "nginx"], required=True)
 
     print_step("Firewall")
     if shutil.which("ufw") and ask_user("Configure UFW?", default=False):
