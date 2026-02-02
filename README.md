@@ -100,6 +100,9 @@ To include `DATA_ROOT` artifacts (can be large):
 
 Note: backing up `DATA_ROOT` requires read permissions (run with sudo if needed).
 
+If `DATABASE_URL` points to PostgreSQL and `pg_dump` is available, the update script will
+also save a database dump in the backup directory.
+
 To update a different branch:
 
 ```bash

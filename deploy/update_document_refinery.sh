@@ -99,6 +99,13 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
   DATA_ROOT=""
   if [ -f ".env" ]; then
     DATA_ROOT=$(grep '^DATA_ROOT=' .env | cut -d '=' -f2-)
+    DATABASE_URL=$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)
+  fi
+  if [ -n "${DATABASE_URL:-}" ]; then
+    DATABASE_URL="${DATABASE_URL%\"}"
+    DATABASE_URL="${DATABASE_URL#\"}"
+    DATABASE_URL="${DATABASE_URL%\'}"
+    DATABASE_URL="${DATABASE_URL#\'}"
   fi
   if [ -z "${DATA_ROOT}" ]; then
     DATA_ROOT="/var/lib/docling_service"
@@ -118,6 +125,19 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
     cp "document_refinery/db.sqlite3" "${BACKUP_DIR}/db_${TIMESTAMP}.sqlite3"
   else
     print_warning "SQLite DB not found; skipping DB backup"
+  fi
+  if [ -n "${DATABASE_URL:-}" ] && echo "${DATABASE_URL}" | grep -q '^postgresql://'; then
+    print_status "Detected PostgreSQL DATABASE_URL, attempting pg_dump..."
+    if command -v pg_dump >/dev/null 2>&1; then
+      ENV_DUMP="${BACKUP_DIR}/db_${TIMESTAMP}.dump"
+      if pg_dump "${DATABASE_URL}" > "${ENV_DUMP}"; then
+        print_status "Postgres dump written to ${ENV_DUMP}"
+      else
+        print_warning "pg_dump failed; skipping Postgres backup"
+      fi
+    else
+      print_warning "pg_dump not available; install postgresql-client to enable Postgres backups"
+    fi
   fi
   if [ "${DO_BACKUP_DATA_ROOT}" -eq 1 ]; then
     if [ -d "${DATA_ROOT}" ]; then
