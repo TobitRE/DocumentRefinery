@@ -65,6 +65,13 @@ def _disk_usage(path: str) -> dict[str, int | float]:
     return {"total": usage.total, "used": usage.used, "free": usage.free, "percent": percent}
 
 
+def _safe_disk_usage(path: str):
+    try:
+        return _disk_usage(path)
+    except OSError:
+        return None
+
+
 def _gpu_info() -> dict[str, object]:
     info: dict[str, object] = {"available": False}
     driver_version = None
@@ -146,13 +153,20 @@ def system_status(request):
     )
 
     data_root = getattr(settings, "DATA_ROOT", "/var/lib/docling_service")
+    loadavg = None
+    if hasattr(os, "getloadavg"):
+        try:
+            loadavg = os.getloadavg()
+        except OSError:
+            loadavg = None
+
     payload = {
         "timestamp": timezone.now().isoformat(),
         "checks": checks,
         "cpu": {
             "count": os.cpu_count(),
             "model": _read_cpu_model(),
-            "loadavg": os.getloadavg() if hasattr(os, "getloadavg") else None,
+            "loadavg": loadavg,
         },
         "memory": {
             "total": total_mem,
@@ -161,8 +175,8 @@ def system_status(request):
             "percent": mem_percent,
         },
         "disk": {
-            "root": _disk_usage("/"),
-            "data_root": _disk_usage(data_root) if os.path.exists(data_root) else None,
+            "root": _safe_disk_usage("/"),
+            "data_root": _safe_disk_usage(data_root) if os.path.exists(data_root) else None,
         },
         "uptime_seconds": _read_uptime(),
         "gpu": _gpu_info(),
