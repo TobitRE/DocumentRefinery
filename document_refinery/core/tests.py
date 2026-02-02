@@ -13,8 +13,10 @@ class TestInternalTokenGuard(TestCase):
 
             response = self.client.get("/healthz", HTTP_X_INTERNAL_TOKEN="secret-token")
             self.assertEqual(response.status_code, 200)
+            self.assertIn("docling_version", response.json())
 
     def test_healthz_open_without_token(self):
         with override_settings(INTERNAL_ENDPOINTS_TOKEN=""):
             response = self.client.get("/healthz")
             self.assertEqual(response.status_code, 200)
+            self.assertIn("docling_version", response.json())

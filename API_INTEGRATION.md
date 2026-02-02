@@ -52,6 +52,40 @@ Constraints:
 - Only PDF is accepted (`application/pdf` or `application/x-pdf`).
 - Max size is controlled by `UPLOAD_MAX_SIZE_MB` (default 50 MB).
 
+Docling options (current support):
+- `max_num_pages` (int >= 0) — passed to the Docling converter; default from `MAX_PAGES` or unlimited.
+- `max_file_size` (int >= 0, bytes) — passed to the converter; default from `UPLOAD_MAX_SIZE_MB`.
+- `exports` (list of strings) — controls which artifacts are generated. Default: `["markdown", "text", "doctags"]`.
+- `ocr` (bool) — validated but not yet wired to the converter (reserved).
+- `ocr_languages` (list of strings) — validated but not yet wired (reserved).
+
+Unknown keys are accepted but currently ignored unless implemented in the pipeline.
+If `options_json` is omitted, defaults come from the API key or tenant settings.
+
+Docling official options (reference):
+- `PdfPipelineOptions` exposes fields such as `do_ocr`, `do_table_structure`,
+  `do_picture_description`, `do_picture_classification`, `document_timeout`,
+  `force_backend_text`, and output helpers like `generate_page_images`,
+  `generate_parsed_pages`, `generate_picture_images`, `generate_table_images`,
+  plus `images_scale`, `layout_options`, `ocr_options`, and
+  `table_structure_options`.
+- OCR backends are configured via `ocr_options` and `OcrEngine` values such as
+  `AUTO`, `EASYOCR`, `OCRMAC`, `RAPIDOCR`, `TESSERACT`, and `TESSERACT_CLI`.
+- `OcrOptions` include `lang`, `force_full_page_ocr`, and `bitmap_area_threshold`.
+  `TesseractOcrOptions` adds `path` and `psm` fields for Tesseract configuration.
+- Docling examples show full-page OCR with `do_ocr=True` and `force_full_page_ocr=True`,
+  and Tesseract language detection using `lang=["auto"]` with
+  `TesseractCliOcrOptions`.
+
+Official references:
+- https://docling-project.github.io/docling/reference/pipeline_options/
+- https://docling-project.github.io/docling/examples/full_page_ocr/
+- https://docling-project.github.io/docling/examples/tesseract_lang_detection/
+
+This API currently maps only the subset listed above. If you want additional
+Docling options exposed, specify which keys you need and how they should map to
+the pipeline (and whether unknown keys should be rejected or passed through).
+
 Example (Python):
 
 ```python
@@ -68,7 +102,10 @@ with open("/path/to/file.pdf", "rb") as f:
         files={"file": f},
         data={
             "ingest": "true",
-            "options_json": json.dumps({"languages": ["en"]}),
+            "options_json": json.dumps({
+                "exports": ["markdown", "text", "doctags"],
+                "max_num_pages": 50,
+            }),
         },
         timeout=60,
     )
@@ -185,6 +222,8 @@ X-Internal-Token: <token>
 ```
 
 or via `?token=...` query parameter.
+
+`/healthz` returns a JSON payload including `docling_version` when available.
 
 ## Recommended integration flow (Django)
 

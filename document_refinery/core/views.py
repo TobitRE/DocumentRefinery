@@ -23,8 +23,19 @@ def healthz(request):
     guard = _require_internal_token(request)
     if guard:
         return guard
+    docling_version = None
+    try:
+        from docling import DoclingVersion
+
+        docling_version = DoclingVersion().docling_version
+    except Exception:
+        docling_version = None
     return JsonResponse(
-        {"status": "ok", "timestamp": timezone.now().isoformat()},
+        {
+            "status": "ok",
+            "timestamp": timezone.now().isoformat(),
+            "docling_version": docling_version,
+        },
         status=200,
     )
 
