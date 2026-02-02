@@ -100,15 +100,21 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "request_id": {
+            "()": "core.logging.RequestIDFilter",
+        },
+    },
     "formatters": {
         "simple": {
-            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+            "format": "%(levelname)s %(asctime)s %(name)s [%(request_id)s] %(message)s",
         },
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "simple",
+            "filters": ["request_id"],
         },
     },
     "root": {"handlers": ["console"], "level": "INFO"},

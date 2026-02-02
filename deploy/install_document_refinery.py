@@ -160,7 +160,14 @@ def main() -> None:
     venv_python = venv_bin / "python"
 
     print_step("System Dependencies")
-    deps = ["python3-venv", "python3-pip", "nginx", "redis-server", "clamav-daemon"]
+    deps = [
+        "python3-venv",
+        "python3-pip",
+        "nginx",
+        "redis-server",
+        "clamav-daemon",
+        "clamav-freshclam",
+    ]
     if ask_user("Install OCR deps (tesseract-ocr, libgl1)?", default=True):
         deps.extend(["tesseract-ocr", "libgl1"])
     if ask_user("Install UFW firewall package?", default=False):
@@ -175,6 +182,8 @@ def main() -> None:
 
     run_cmd(["systemctl", "enable", "--now", "redis-server"], required=True)
     run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
+    run_cmd(["systemctl", "enable", "--now", "clamav-freshclam"], required=True)
+    run_cmd(["freshclam"])
     run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
 
     print_step("Python Environment")
@@ -293,8 +302,18 @@ except Exception as exc:
         [str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "migrate"],
         required=True,
     )
-    if ask_user("Create Django superuser now?", default=False):
-        run_cmd([str(venv_python), str(repo_root / "document_refinery" / "manage.py"), "createsuperuser"])
+    if ask_user("Create Django superuser now? (use email as username)", default=False):
+        admin_email = get_input("Admin email (used as username)")
+        cmd = [
+            str(venv_python),
+            str(repo_root / "document_refinery" / "manage.py"),
+            "createsuperuser",
+            "--username",
+            admin_email,
+            "--email",
+            admin_email,
+        ]
+        run_cmd(cmd)
 
     print_step("Systemd Services")
     socket_path = "/run/document_refinery/document_refinery.sock"
