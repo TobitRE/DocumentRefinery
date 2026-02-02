@@ -19,14 +19,30 @@ This service is intended to:
 - `docling_django_task_list.md` — implementation plan and checklist
 - `README.md` — project overview and setup notes
 
-## Quickstart (placeholder)
+## Quickstart
 
-Implementation is not yet in this repository. Once the Django project is added,
-this section should include:
-- environment setup steps
-- migrations and initial admin user creation
-- how to run the API server and Celery worker
-- a minimal `curl` upload example
+```bash
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+cp .env.example .env
+./venv/bin/python document_refinery/manage.py migrate
+./venv/bin/python document_refinery/manage.py createsuperuser
+./venv/bin/python document_refinery/manage.py runserver
+```
+
+In another terminal, start a Celery worker:
+
+```bash
+./venv/bin/celery -A config worker --loglevel=INFO
+```
+
+Minimal upload example:
+
+```bash
+curl -X POST http://localhost:8000/v1/documents/ \
+  -H "Authorization: Api-Key <your-key>" \
+  -F "file=@sample.pdf"
+```
 
 ## Install script (single host)
 
@@ -41,11 +57,13 @@ Notes:
 - The virtualenv is created one level above the repo (default `../venv`).
 - The script can generate `.env` from `.env.example`, install system deps,
   configure systemd + nginx, and optionally request TLS via certbot.
+- It installs and enables `clamav-freshclam` for signature updates.
+- It can run a Docling smoke test and will prompt for an email-based superuser.
 - The dashboard includes a staff-only system stats panel at `/dashboard/`.
 
-## Environment variables (planned)
+## Environment variables
 
-Expected configuration values (to be finalized in the implementation):
+Expected configuration values:
 - `DJANGO_SETTINGS_MODULE`
 - `SECRET_KEY`
 - `DATA_ROOT`
@@ -54,6 +72,7 @@ Expected configuration values (to be finalized in the implementation):
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND` (optional)
 - `ALLOWED_HOSTS`
+- `INTERNAL_ENDPOINTS_TOKEN` (optional)
 - `CORS_ALLOWED_ORIGINS` (if needed)
 
 ## References
