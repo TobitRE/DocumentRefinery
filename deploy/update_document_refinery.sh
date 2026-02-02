@@ -14,7 +14,7 @@ print_status() { echo -e "${GREEN}[INFO]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-DO_BACKUP=0
+DO_BACKUP=1
 DO_BACKUP_DATA_ROOT=0
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 
@@ -22,6 +22,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --backup)
       DO_BACKUP=1
+      shift
+      ;;
+    --no-backup)
+      DO_BACKUP=0
       shift
       ;;
     --backup-data-root)

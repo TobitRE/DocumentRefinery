@@ -73,10 +73,10 @@ This script pulls `main`, installs dependencies from `requirements.txt`, runs mi
 restarts `gunicorn.service` and `celery-worker.service` (and `celery-beat.service` if present),
 reloads nginx, and warms up `/healthz`.
 
-Optional backup before migrations:
+Backups run by default (env + sqlite DB). Disable with `--no-backup`.
 
 ```bash
-./deploy/update_document_refinery.sh --backup
+./deploy/update_document_refinery.sh --no-backup
 ```
 
 You can also set a custom backup directory:
