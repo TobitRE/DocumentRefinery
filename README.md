@@ -61,6 +61,12 @@ Notes:
 - It can run a Docling smoke test and will prompt for an email-based superuser.
 - The dashboard includes a staff-only system stats panel at `/dashboard/`.
 
+Resume mode (skip destructive steps by default):
+
+```bash
+sudo python3 deploy/install_document_refinery.py --resume
+```
+
 ## Update script
 
 For deployments using systemd + nginx, you can update in-place from the repo root:

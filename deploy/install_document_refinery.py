@@ -132,14 +132,38 @@ def render_env(template_text: str, overrides: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in line:
+                    continue
+                key, value = stripped.split("=", 1)
+                values[key.strip()] = value.strip()
+    except OSError:
+        return {}
+    return values
+
+
+def sanitize_env_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.strip().strip('"').strip("'")
+
+
 def main() -> None:
     require_root()
+    resume = "--resume" in sys.argv
 
     repo_root = find_repo_root(Path(__file__).resolve())
     repo_owner = pwd.getpwuid(repo_root.stat().st_uid).pw_name
 
     print(f"{GREEN}=== DocumentRefinery Install Script ==={RESET}")
     print(f"Repo: {repo_root}")
+    if resume:
+        print(f"{YELLOW}Resume mode enabled: skipping destructive steps by default.{RESET}")
 
     print_step("Service User")
     service_user = get_input("Service user", repo_owner)
@@ -168,21 +192,23 @@ def main() -> None:
         "clamav-daemon",
         "clamav-freshclam",
     ]
-    if ask_user("Install OCR deps (tesseract-ocr, libgl1)?", default=True):
-        deps.extend(["tesseract-ocr", "libgl1"])
-    if ask_user("Install UFW firewall package?", default=False):
-        deps.append("ufw")
     install_fail2ban = False
-    if ask_user("Install fail2ban?", default=False):
-        deps.append("fail2ban")
-        install_fail2ban = True
     install_certbot = False
-    if ask_user("Install certbot (for TLS)?", default=False):
-        deps.extend(["certbot", "python3-certbot-nginx"])
-        install_certbot = True
-    if ask_user(f"Install packages: {' '.join(deps)}?", default=True):
-        run_cmd(["apt", "update"], required=True)
-        run_cmd(["apt", "install", "-y", *deps], required=True)
+    install_packages = ask_user("Install/ensure system packages?", default=not resume)
+    if install_packages:
+        if ask_user("Install OCR deps (tesseract-ocr, libgl1)?", default=not resume):
+            deps.extend(["tesseract-ocr", "libgl1"])
+        if ask_user("Install UFW firewall package?", default=False):
+            deps.append("ufw")
+        if ask_user("Install fail2ban?", default=False):
+            deps.append("fail2ban")
+            install_fail2ban = True
+        if ask_user("Install certbot (for TLS)?", default=False):
+            deps.extend(["certbot", "python3-certbot-nginx"])
+            install_certbot = True
+        if ask_user(f"Install packages: {' '.join(deps)}?", default=True):
+            run_cmd(["apt", "update"], required=True)
+            run_cmd(["apt", "install", "-y", *deps], required=True)
 
     run_cmd(["systemctl", "enable", "--now", "redis-server"], required=True)
     run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
@@ -202,11 +228,15 @@ def main() -> None:
     if not venv_pip.exists():
         print(f"{RED}pip not found in {venv_pip}. Aborting.{RESET}")
         sys.exit(1)
-    run_cmd([str(venv_pip), "install", "--upgrade", "pip"], required=True)
-    run_cmd([str(venv_pip), "install", "-r", str(repo_root / "requirements.txt")], required=True)
+    if ask_user("Install/update Python dependencies?", default=not resume):
+        run_cmd([str(venv_pip), "install", "--upgrade", "pip"], required=True)
+        run_cmd(
+            [str(venv_pip), "install", "-r", str(repo_root / "requirements.txt")],
+            required=True,
+        )
 
     print_step("Docling Smoke Test")
-    if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=True):
+    if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=not resume):
         smoke_code = r'''
 import shutil
 import sys
@@ -277,42 +307,56 @@ except Exception as exc:
     if not env_example.exists():
         print(f"{RED}Missing {env_example}.{RESET}")
         sys.exit(1)
-    if env_path.exists():
-        if not ask_user(f"{env_path} exists. Overwrite?", default=False):
-            print("Keeping existing .env.")
-        else:
-            env_path.unlink()
+    env_values = read_env(env_path) if env_path.exists() else {}
+    data_root = None
 
-    debug_mode = ask_user("Enable DEBUG mode?", default=False)
     domain_name = ""
     if ask_user("Do you have a domain for Nginx?", default=False):
         domain_name = get_input("Domain name (example: docs.example.com)")
-    allowed_hosts_default = domain_name or "localhost,127.0.0.1"
-    allowed_hosts = get_input("ALLOWED_HOSTS (comma-separated)", allowed_hosts_default)
-    data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
-    broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
-    internal_token = ""
-    if ask_user("Protect /healthz,/readyz,/metrics with a token?", default=True):
-        internal_token = secrets.token_urlsafe(32)
-        print(f"{GREEN}Internal token: {internal_token}{RESET}")
-        print(f"{YELLOW}Send as X-Internal-Token header or ?token=...{RESET}")
+    if env_path.exists() and resume:
+        print(f"{YELLOW}Using existing .env in resume mode.{RESET}")
+    else:
+        if env_path.exists():
+            if not ask_user(f"{env_path} exists. Overwrite?", default=False):
+                print("Keeping existing .env.")
+            else:
+                env_path.unlink()
 
-    secret_key = get_input("SECRET_KEY (leave blank to auto-generate)", "")
-    if not secret_key:
-        secret_key = secrets.token_urlsafe(48)
+        debug_mode = ask_user("Enable DEBUG mode?", default=False)
+        allowed_hosts_default = domain_name or "localhost,127.0.0.1"
+        allowed_hosts = get_input("ALLOWED_HOSTS (comma-separated)", allowed_hosts_default)
+        data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
+        broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
-    if not env_path.exists():
-        template_text = env_example.read_text(encoding="utf-8")
-        overrides = {
-            "SECRET_KEY": secret_key,
-            "DEBUG": "true" if debug_mode else "false",
-            "ALLOWED_HOSTS": allowed_hosts,
-            "DATA_ROOT": data_root,
-            "CELERY_BROKER_URL": broker_url,
-            "INTERNAL_ENDPOINTS_TOKEN": internal_token,
-        }
-        write_file(env_path, render_env(template_text, overrides), mode=0o640)
+        internal_token = ""
+        if ask_user("Protect /healthz,/readyz,/metrics with a token?", default=True):
+            internal_token = secrets.token_urlsafe(32)
+            print(f"{GREEN}Internal token: {internal_token}{RESET}")
+            print(f"{YELLOW}Send as X-Internal-Token header or ?token=...{RESET}")
+
+        secret_key = get_input("SECRET_KEY (leave blank to auto-generate)", "")
+        if not secret_key:
+            secret_key = secrets.token_urlsafe(48)
+
+        if not env_path.exists():
+            template_text = env_example.read_text(encoding="utf-8")
+            overrides = {
+                "SECRET_KEY": secret_key,
+                "DEBUG": "true" if debug_mode else "false",
+                "ALLOWED_HOSTS": allowed_hosts,
+                "DATA_ROOT": data_root,
+                "CELERY_BROKER_URL": broker_url,
+                "INTERNAL_ENDPOINTS_TOKEN": internal_token,
+            }
+            write_file(env_path, render_env(template_text, overrides), mode=0o640)
+
+    if not data_root:
+        env_data_root = sanitize_env_value(env_values.get("DATA_ROOT"))
+        if env_data_root and not env_data_root.startswith("$"):
+            data_root = env_data_root
+        else:
+            data_root = "/var/lib/docling_service"
 
     run_cmd(["chown", f"{service_user}:{service_user}", str(env_path)])
 
@@ -448,7 +492,7 @@ WantedBy=multi-user.target
     for name, content in units.items():
         unit_path = Path("/etc/systemd/system") / name
         if unit_path.exists():
-            if not ask_user(f"{unit_path} exists. Overwrite?", default=False):
+            if not ask_user(f"{unit_path} exists. Overwrite?", default=False if resume else False):
                 continue
         write_file(unit_path, content)
 
@@ -482,7 +526,7 @@ WantedBy=multi-user.target
 """
     nginx_path = Path("/etc/nginx/sites-available/document_refinery")
     if nginx_path.exists():
-        if ask_user(f"{nginx_path} exists. Overwrite?", default=False):
+        if ask_user(f"{nginx_path} exists. Overwrite?", default=False if resume else False):
             write_file(nginx_path, nginx_conf)
     else:
         write_file(nginx_path, nginx_conf)
@@ -505,8 +549,9 @@ WantedBy=multi-user.target
         run_cmd("echo 'y' | ufw enable", shell=True)
 
     print_step("TLS")
-    if domain_name and install_certbot:
-        if ask_user("Request TLS certificate with certbot?", default=True):
+    certbot_available = install_certbot or shutil.which("certbot")
+    if domain_name and certbot_available:
+        if ask_user("Request TLS certificate with certbot?", default=False if resume else True):
             email = get_input("Certbot email")
             run_cmd(
                 [
