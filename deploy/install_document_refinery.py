@@ -172,6 +172,10 @@ def main() -> None:
         deps.extend(["tesseract-ocr", "libgl1"])
     if ask_user("Install UFW firewall package?", default=False):
         deps.append("ufw")
+    install_fail2ban = False
+    if ask_user("Install fail2ban?", default=False):
+        deps.append("fail2ban")
+        install_fail2ban = True
     install_certbot = False
     if ask_user("Install certbot (for TLS)?", default=False):
         deps.extend(["certbot", "python3-certbot-nginx"])
@@ -184,6 +188,8 @@ def main() -> None:
     run_cmd(["systemctl", "enable", "--now", "clamav-daemon"], required=True)
     run_cmd(["systemctl", "enable", "--now", "clamav-freshclam"], required=True)
     run_cmd(["freshclam"])
+    if install_fail2ban:
+        run_cmd(["systemctl", "enable", "--now", "fail2ban"], required=True)
     run_cmd(["systemctl", "enable", "--now", "nginx"], required=True)
 
     print_step("Python Environment")
@@ -294,8 +300,14 @@ except Exception as exc:
     run_cmd(["chown", f"{service_user}:{service_user}", str(env_path)])
 
     print_step("Data Directory")
+    nginx_group_default = "www-data" if group_exists("www-data") else service_user
+    nginx_group = get_input("Nginx file/socket group", nginx_group_default)
+    if not group_exists(nginx_group):
+        print(f"{RED}Group '{nginx_group}' does not exist. Using '{service_user}'.{RESET}")
+        nginx_group = service_user
     Path(data_root).mkdir(parents=True, exist_ok=True)
-    run_cmd(["chown", "-R", f"{service_user}:{service_user}", data_root])
+    run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", data_root])
+    run_cmd(["chmod", "-R", "g+rx", data_root])
 
     print_step("Database")
     run_cmd(
@@ -317,11 +329,6 @@ except Exception as exc:
 
     print_step("Systemd Services")
     socket_path = "/run/document_refinery/document_refinery.sock"
-    nginx_group_default = "www-data" if group_exists("www-data") else service_user
-    nginx_group = get_input("Nginx socket group", nginx_group_default)
-    if not group_exists(nginx_group):
-        print(f"{RED}Group '{nginx_group}' does not exist. Using '{service_user}'.{RESET}")
-        nginx_group = service_user
     gunicorn_service = f"""[Unit]
 Description=DocumentRefinery Gunicorn
 After=network.target
@@ -339,6 +346,18 @@ ExecStart={venv_bin}/gunicorn \\
     --chmod-socket 660 \\
     config.wsgi:application
 UMask=007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths={data_root} /run/document_refinery
 Restart=on-failure
 KillSignal=SIGTERM
 
@@ -352,10 +371,22 @@ After=network.target
 
 [Service]
 User={service_user}
-Group={service_user}
+Group={nginx_group}
 WorkingDirectory={repo_root}
 EnvironmentFile={env_path}
 ExecStart={venv_bin}/celery -A config worker --loglevel=INFO
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths={data_root}
 Restart=on-failure
 KillSignal=SIGTERM
 
@@ -369,10 +400,22 @@ After=network.target
 
 [Service]
 User={service_user}
-Group={service_user}
+Group={nginx_group}
 WorkingDirectory={repo_root}
 EnvironmentFile={env_path}
 ExecStart={venv_bin}/celery -A config beat --loglevel=INFO
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths={data_root}
 Restart=on-failure
 KillSignal=SIGTERM
 
