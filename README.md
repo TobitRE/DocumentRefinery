@@ -61,6 +61,18 @@ Notes:
 - It can run a Docling smoke test and will prompt for an email-based superuser.
 - The dashboard includes a staff-only system stats panel at `/dashboard/`.
 
+## Update script
+
+For deployments using systemd + nginx, you can update in-place from the repo root:
+
+```bash
+./deploy/update_document_refinery.sh
+```
+
+This script pulls `main`, installs dependencies from `requirements.txt`, runs migrations,
+restarts `gunicorn.service` and `celery-worker.service` (and `celery-beat.service` if present),
+reloads nginx, and warms up `/healthz`.
+
 ## Environment variables
 
 Expected configuration values:
