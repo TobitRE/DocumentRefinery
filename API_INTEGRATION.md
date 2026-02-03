@@ -266,6 +266,10 @@ timeout) and return progress in your UI.
 
 ## Webhooks (optional)
 
+Required scopes:
+- `webhooks:write` to create/update/delete endpoints
+- `webhooks:read` to list/retrieve endpoints
+
 Create a webhook endpoint:
 
 ```
@@ -278,6 +282,21 @@ Fields:
 - `secret` (optional) — used for HMAC signing
 - `events` (optional, list of strings) — defaults to `["job.updated"]`
 - `enabled` (optional, boolean) — defaults to `true`
+
+Example registration (curl):
+
+```bash
+curl -X POST https://docex.nfx-systems.com/v1/webhooks/ \
+  -H "Authorization: Api-Key NFX_DOC_EX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My App",
+    "url": "https://example.com/webhooks/docrefinery",
+    "secret": "supersecret",
+    "events": ["job.updated"],
+    "enabled": true
+  }'
+```
 
 List endpoints:
 
