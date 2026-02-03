@@ -46,6 +46,7 @@ class Document(BaseModel):
     created_by_key = models.ForeignKey(
         APIKey, on_delete=models.PROTECT, related_name="documents_created"
     )
+    external_uuid = models.UUIDField(null=True, blank=True, db_index=True)
     original_filename = models.CharField(max_length=255)
     sha256 = models.CharField(max_length=64, blank=True, null=True)
     mime_type = models.CharField(max_length=100)
@@ -87,6 +88,7 @@ class IngestionJob(BaseModel):
         APIKey, on_delete=models.PROTECT, related_name="jobs_created"
     )
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="jobs")
+    external_uuid = models.UUIDField(null=True, blank=True, db_index=True)
     status = models.CharField(
         max_length=20,
         choices=IngestionJobStatus.choices,
@@ -186,3 +188,58 @@ class JobEvent(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.level}: {self.message[:40]}"
+
+
+class WebhookDeliveryStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    RETRYING = "RETRYING", "Retrying"
+    DELIVERED = "DELIVERED", "Delivered"
+    FAILED = "FAILED", "Failed"
+
+
+class WebhookEndpoint(BaseModel):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="webhooks")
+    created_by_key = models.ForeignKey(
+        APIKey, on_delete=models.PROTECT, related_name="webhooks_created"
+    )
+    name = models.CharField(max_length=200)
+    url = models.URLField(max_length=500)
+    secret = models.CharField(max_length=255, blank=True)
+    enabled = models.BooleanField(default=True)
+    events = models.JSONField(default=list, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_failure_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["tenant", "enabled"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.tenant_id})"
+
+
+class WebhookDelivery(BaseModel):
+    endpoint = models.ForeignKey(
+        WebhookEndpoint, on_delete=models.CASCADE, related_name="deliveries"
+    )
+    event_type = models.CharField(max_length=100)
+    payload_json = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=WebhookDeliveryStatus.choices,
+        default=WebhookDeliveryStatus.PENDING,
+    )
+    response_code = models.PositiveSmallIntegerField(null=True, blank=True)
+    attempt = models.PositiveSmallIntegerField(default=0)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["endpoint", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.event_type} -> {self.endpoint_id} ({self.status})"

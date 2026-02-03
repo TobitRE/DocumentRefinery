@@ -1,5 +1,6 @@
 import hashlib
 import os
+import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -16,13 +17,21 @@ from authn.options import validate_docling_options
 
 from django.db import IntegrityError
 
-from .models import Artifact, Document, IngestionJob, IngestionJobStatus, IngestionStage
-from .tasks import start_ingestion_pipeline
+from .models import (
+    Artifact,
+    Document,
+    IngestionJob,
+    IngestionJobStatus,
+    IngestionStage,
+    WebhookEndpoint,
+)
+from .tasks import queue_job_webhooks, start_ingestion_pipeline
 from .serializers import (
     ArtifactSerializer,
     DocumentSerializer,
     DocumentUploadSerializer,
     JobSerializer,
+    WebhookEndpointSerializer,
 )
 
 
@@ -56,6 +65,7 @@ class DocumentViewSet(
         uploaded = serializer.validated_data["file"]
         ingest = serializer.validated_data.get("ingest", False)
         options_json = serializer.validated_data.get("options_json", None)
+        external_uuid = serializer.validated_data.get("external_uuid", None)
 
         if uploaded.content_type not in ("application/pdf", "application/x-pdf"):
             return Response(
@@ -77,6 +87,7 @@ class DocumentViewSet(
         doc = Document(
             tenant=api_key.tenant,
             created_by_key=api_key,
+            external_uuid=external_uuid,
             original_filename=filename,
             mime_type=uploaded.content_type or "application/pdf",
             size_bytes=0,
@@ -142,6 +153,7 @@ class DocumentViewSet(
                 tenant=api_key.tenant,
                 created_by_key=api_key,
                 document=doc,
+                external_uuid=doc.external_uuid,
                 status=IngestionJobStatus.QUEUED,
                 stage=IngestionStage.SCANNING,
                 queued_at=timezone.now(),
@@ -223,6 +235,13 @@ class JobViewSet(
         api_key = self.request.auth
         queryset = IngestionJob.objects.filter(tenant=api_key.tenant).order_by("-created_at")
 
+        external_uuid = self.request.query_params.get("external_uuid")
+        if external_uuid:
+            try:
+                parsed = uuid.UUID(external_uuid)
+            except ValueError:
+                return IngestionJob.objects.none()
+            queryset = queryset.filter(external_uuid=parsed)
         status_param = self.request.query_params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
@@ -232,6 +251,15 @@ class JobViewSet(
         document_id = self.request.query_params.get("document_id")
         if document_id:
             queryset = queryset.filter(document_id=document_id)
+        updated_after = self.request.query_params.get("updated_after")
+        if updated_after:
+            try:
+                dt = timezone.datetime.fromisoformat(updated_after)
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                queryset = queryset.filter(modified_at__gte=dt)
+            except ValueError:
+                return IngestionJob.objects.none()
         created_after = self.request.query_params.get("created_after")
         if created_after:
             try:
@@ -260,10 +288,13 @@ class JobViewSet(
                 {"error_code": "NOT_CANCELABLE", "message": "Job cannot be canceled."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        prev_status = job.status
+        prev_stage = job.stage
         job.status = IngestionJobStatus.CANCELED
         job.finished_at = timezone.now()
         job.recompute_durations()
         job.save()
+        queue_job_webhooks(job, prev_status, prev_stage)
         if job.celery_task_id:
             try:
                 current_app.control.revoke(
@@ -298,6 +329,8 @@ class JobViewSet(
                 pass
         artifacts.delete()
 
+        prev_status = job.status
+        prev_stage = job.stage
         job.attempt += 1
         job.status = IngestionJobStatus.QUEUED
         job.stage = IngestionStage.SCANNING
@@ -313,6 +346,41 @@ class JobViewSet(
         job.export_ms = None
         job.chunk_ms = None
         job.save()
+        queue_job_webhooks(job, prev_status, prev_stage)
 
         start_ingestion_pipeline(job.id)
         return Response(JobSerializer(job).data)
+
+
+class WebhookEndpointViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = WebhookEndpoint.objects.all()
+    serializer_class = WebhookEndpointSerializer
+    permission_classes = [APIKeyRequired, HasScope]
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            self.required_scopes = ["webhooks:read"]
+        else:
+            self.required_scopes = ["webhooks:write"]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        api_key = self.request.auth
+        return WebhookEndpoint.objects.filter(tenant=api_key.tenant).order_by("-created_at")
+
+    def perform_create(self, serializer):
+        events = serializer.validated_data.get("events")
+        if not events:
+            events = ["job.updated"]
+        serializer.save(
+            tenant=self.request.auth.tenant,
+            created_by_key=self.request.auth,
+            events=events,
+        )

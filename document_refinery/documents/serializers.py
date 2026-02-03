@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Artifact, Document, IngestionJob
+from .models import Artifact, Document, IngestionJob, WebhookEndpoint
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -9,6 +9,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "uuid",
+            "external_uuid",
             "original_filename",
             "sha256",
             "mime_type",
@@ -23,6 +24,7 @@ class DocumentUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
     ingest = serializers.BooleanField(required=False, default=False)
     options_json = serializers.JSONField(required=False)
+    external_uuid = serializers.UUIDField(required=False)
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
@@ -46,6 +48,7 @@ class JobSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "document_id",
+            "external_uuid",
             "status",
             "stage",
             "queued_at",
@@ -63,3 +66,29 @@ class JobSerializer(serializers.ModelSerializer):
             "error_details_json",
             "created_at",
         )
+
+
+class WebhookEndpointSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WebhookEndpoint
+        fields = (
+            "id",
+            "name",
+            "url",
+            "secret",
+            "events",
+            "enabled",
+            "last_success_at",
+            "last_failure_at",
+            "created_at",
+        )
+        extra_kwargs = {
+            "secret": {"write_only": True},
+        }
+
+    def validate_events(self, value):
+        if value is None:
+            return value
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise serializers.ValidationError("events must be a list of strings.")
+        return value

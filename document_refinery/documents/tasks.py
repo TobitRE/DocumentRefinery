@@ -1,6 +1,11 @@
+import hashlib
+import hmac
 import json
 import os
 import time
+import urllib.error
+import urllib.request
+from datetime import timedelta
 from pathlib import Path
 
 from celery import chain, shared_task
@@ -19,7 +24,15 @@ from .models import (
     IngestionJobStatus,
     IngestionStage,
     Document,
+    WebhookDelivery,
+    WebhookDeliveryStatus,
+    WebhookEndpoint,
 )
+
+DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
+WEBHOOK_MAX_ATTEMPTS = int(getattr(settings, "WEBHOOK_MAX_ATTEMPTS", 5))
+WEBHOOK_INITIAL_BACKOFF_SECONDS = int(getattr(settings, "WEBHOOK_INITIAL_BACKOFF_SECONDS", 30))
+WEBHOOK_REQUEST_TIMEOUT = int(getattr(settings, "WEBHOOK_REQUEST_TIMEOUT", 10))
 
 
 def start_ingestion_pipeline(job_id: int):
@@ -125,6 +138,8 @@ def _artifact_relpath(job: IngestionJob, filename: str) -> str:
 
 
 def _mark_failed(job: IngestionJob, code: str, message: str, details: dict | None = None):
+    prev_status = job.status
+    prev_stage = job.stage
     job.status = IngestionJobStatus.FAILED
     job.error_code = code
     job.error_message = message
@@ -132,6 +147,7 @@ def _mark_failed(job: IngestionJob, code: str, message: str, details: dict | Non
     job.finished_at = timezone.now()
     job.recompute_durations()
     job.save()
+    queue_job_webhooks(job, prev_status, prev_stage)
 
 
 def _is_canceled(job: IngestionJob) -> bool:
@@ -143,6 +159,8 @@ def scan_pdf_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
     if _is_canceled(job):
         return job_id
+    prev_status = job.status
+    prev_stage = job.stage
     job.stage = IngestionStage.SCANNING
     if not job.started_at:
         job.started_at = timezone.now()
@@ -150,6 +168,7 @@ def scan_pdf_task(self, job_id: int) -> int:
     if self.request.id:
         job.celery_task_id = self.request.id
     job.save()
+    queue_job_webhooks(job, prev_status, prev_stage)
 
     start = time.monotonic()
     document = job.document
@@ -169,12 +188,15 @@ def scan_pdf_task(self, job_id: int) -> int:
     if status == "FOUND":
         document.status = DocumentStatus.INFECTED
         document.save()
+        prev_status = job.status
+        prev_stage = job.stage
         job.status = IngestionJobStatus.QUARANTINED
         job.error_code = "VIRUS_FOUND"
         job.error_message = reason or "Virus detected"
         job.finished_at = timezone.now()
         job.recompute_durations()
         job.save()
+        queue_job_webhooks(job, prev_status, prev_stage)
         raise RuntimeError("Virus found")
     if status == "ERROR":
         _mark_failed(job, "VIRUS_SCAN_ERROR", reason or "Scan error")
@@ -201,11 +223,14 @@ def docling_convert_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
     if _is_canceled(job):
         return job_id
+    prev_status = job.status
+    prev_stage = job.stage
     job.stage = IngestionStage.CONVERTING
     job.status = IngestionJobStatus.RUNNING
     if self.request.id:
         job.celery_task_id = self.request.id
     job.save()
+    queue_job_webhooks(job, prev_status, prev_stage)
 
     start = time.monotonic()
     document = job.document
@@ -248,11 +273,14 @@ def export_artifacts_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
     if _is_canceled(job):
         return job_id
+    prev_status = job.status
+    prev_stage = job.stage
     job.stage = IngestionStage.EXPORTING
     job.status = IngestionJobStatus.RUNNING
     if self.request.id:
         job.celery_task_id = self.request.id
     job.save()
+    queue_job_webhooks(job, prev_status, prev_stage)
 
     start = time.monotonic()
     relpath = _artifact_relpath(job, "docling.json")
@@ -308,6 +336,8 @@ def finalize_job_task(self, job_id: int) -> int:
     job = IngestionJob.objects.get(pk=job_id)
     if _is_canceled(job):
         return job_id
+    prev_status = job.status
+    prev_stage = job.stage
     job.stage = IngestionStage.FINALIZING
     job.status = IngestionJobStatus.SUCCEEDED
     job.finished_at = timezone.now()
@@ -315,4 +345,137 @@ def finalize_job_task(self, job_id: int) -> int:
     if self.request.id:
         job.celery_task_id = self.request.id
     job.save()
+    queue_job_webhooks(job, prev_status, prev_stage)
     return job_id
+
+
+def _isoformat(value):
+    if not value:
+        return None
+    return value.isoformat()
+
+
+def _job_webhook_payload(job: IngestionJob, prev_status: str | None, prev_stage: str | None) -> dict:
+    return {
+        "event": "job.updated",
+        "job_id": job.id,
+        "job_uuid": str(job.uuid),
+        "document_id": job.document_id,
+        "external_uuid": str(job.external_uuid) if job.external_uuid else None,
+        "status": job.status,
+        "stage": job.stage,
+        "previous_status": prev_status,
+        "previous_stage": prev_stage,
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+        "error_details": job.error_details_json,
+        "queued_at": _isoformat(job.queued_at),
+        "started_at": _isoformat(job.started_at),
+        "finished_at": _isoformat(job.finished_at),
+        "created_at": _isoformat(job.created_at),
+        "modified_at": _isoformat(job.modified_at),
+    }
+
+
+def queue_job_webhooks(job: IngestionJob, prev_status: str | None, prev_stage: str | None) -> int:
+    if prev_status == job.status and prev_stage == job.stage:
+        return 0
+    endpoints = WebhookEndpoint.objects.filter(tenant=job.tenant, enabled=True)
+    if not endpoints.exists():
+        return 0
+    payload = _job_webhook_payload(job, prev_status, prev_stage)
+    delivery_ids = []
+    for endpoint in endpoints:
+        events = endpoint.events or DEFAULT_WEBHOOK_EVENTS
+        if "job.updated" not in events:
+            continue
+        delivery = WebhookDelivery.objects.create(
+            endpoint=endpoint,
+            event_type="job.updated",
+            payload_json=payload,
+            status=WebhookDeliveryStatus.PENDING,
+        )
+        delivery_ids.append(delivery.id)
+    for delivery_id in delivery_ids:
+        deliver_webhook_delivery.delay(delivery_id)
+    return len(delivery_ids)
+
+
+@shared_task(bind=True)
+def deliver_webhook_delivery(self, delivery_id: int) -> bool:
+    delivery = WebhookDelivery.objects.select_related("endpoint").get(pk=delivery_id)
+    if delivery.status == WebhookDeliveryStatus.DELIVERED:
+        return True
+    if delivery.status == WebhookDeliveryStatus.FAILED:
+        return False
+
+    endpoint = delivery.endpoint
+    if not endpoint.enabled:
+        delivery.status = WebhookDeliveryStatus.FAILED
+        delivery.last_error = "Endpoint disabled"
+        delivery.save(update_fields=["status", "last_error", "modified_at"])
+        return False
+
+    payload = delivery.payload_json or {}
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "DocumentRefinery-Webhooks/1.0",
+        "X-DocRefinery-Event": delivery.event_type,
+        "X-DocRefinery-Delivery": str(delivery.uuid),
+    }
+    if endpoint.secret:
+        signature = hmac.new(endpoint.secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        headers["X-DocRefinery-Signature"] = f"sha256={signature}"
+
+    request = urllib.request.Request(endpoint.url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=WEBHOOK_REQUEST_TIMEOUT) as response:
+            code = response.getcode()
+        if 200 <= code < 300:
+            delivery.status = WebhookDeliveryStatus.DELIVERED
+            delivery.response_code = code
+            delivery.delivered_at = timezone.now()
+            delivery.next_retry_at = None
+            delivery.save(
+                update_fields=[
+                    "status",
+                    "response_code",
+                    "delivered_at",
+                    "next_retry_at",
+                    "modified_at",
+                ]
+            )
+            endpoint.last_success_at = timezone.now()
+            endpoint.save(update_fields=["last_success_at", "modified_at"])
+            return True
+        raise urllib.error.HTTPError(
+            endpoint.url, code, f"Unexpected status {code}", hdrs=None, fp=None
+        )
+    except Exception as exc:
+        delivery.attempt += 1
+        response_code = getattr(exc, "code", None)
+        delivery.response_code = response_code
+        delivery.last_error = str(exc)
+        if delivery.attempt >= WEBHOOK_MAX_ATTEMPTS:
+            delivery.status = WebhookDeliveryStatus.FAILED
+            delivery.next_retry_at = None
+        else:
+            delivery.status = WebhookDeliveryStatus.RETRYING
+            delay = WEBHOOK_INITIAL_BACKOFF_SECONDS * (2 ** (delivery.attempt - 1))
+            delivery.next_retry_at = timezone.now() + timedelta(seconds=delay)
+        delivery.save(
+            update_fields=[
+                "status",
+                "attempt",
+                "response_code",
+                "last_error",
+                "next_retry_at",
+                "modified_at",
+            ]
+        )
+        endpoint.last_failure_at = timezone.now()
+        endpoint.save(update_fields=["last_failure_at", "modified_at"])
+        if delivery.status == WebhookDeliveryStatus.RETRYING:
+            self.apply_async(args=[delivery.id], countdown=delay)
+        return False

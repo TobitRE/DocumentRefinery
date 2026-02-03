@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import Artifact, Document, IngestionJob, JobEvent
+from .models import (
+    Artifact,
+    Document,
+    IngestionJob,
+    JobEvent,
+    WebhookDelivery,
+    WebhookEndpoint,
+)
 
 
 @admin.register(Document)
@@ -51,5 +58,19 @@ class JobEventAdmin(admin.ModelAdmin):
     list_display = ("id", "job", "level", "message", "created_at")
     list_filter = ("level",)
     search_fields = ("message",)
+
+
+@admin.register(WebhookEndpoint)
+class WebhookEndpointAdmin(admin.ModelAdmin):
+    list_display = ("id", "tenant", "name", "url", "enabled", "last_success_at", "last_failure_at")
+    list_filter = ("tenant", "enabled")
+    search_fields = ("name", "url")
+
+
+@admin.register(WebhookDelivery)
+class WebhookDeliveryAdmin(admin.ModelAdmin):
+    list_display = ("id", "endpoint", "event_type", "status", "attempt", "response_code")
+    list_filter = ("status", "event_type")
+    search_fields = ("endpoint__name", "endpoint__url")
 
 # Register your models here.

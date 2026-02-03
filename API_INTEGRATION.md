@@ -34,6 +34,8 @@ The API key must include the scopes required by each endpoint.
 - `artifacts:read` — list/download artifacts
 - `jobs:read` — list/retrieve jobs
 - `dashboard:read` — dashboard summary/workers endpoints
+- `webhooks:read` — list/retrieve webhook endpoints
+- `webhooks:write` — create/update/delete webhook endpoints
 
 ## Upload a PDF (async recommended)
 
@@ -47,6 +49,7 @@ Multipart fields:
 - `file` (required) — PDF file
 - `ingest` (optional, boolean) — set `true` to start processing
 - `options_json` (optional) — Docling options JSON
+- `external_uuid` (optional, UUID) — your correlation ID, echoed on documents and jobs
 
 Constraints:
 - Only PDF is accepted (`application/pdf` or `application/x-pdf`).
@@ -115,7 +118,7 @@ print(payload)
 ```
 
 Response fields include:
-- `id`, `uuid`, `original_filename`, `sha256`, `size_bytes`, `status`, `created_at`
+- `id`, `uuid`, `external_uuid`, `original_filename`, `sha256`, `size_bytes`, `status`, `created_at`
 - `job_id` when `ingest=true`
 
 ## Track progress
@@ -136,6 +139,7 @@ Useful fields:
 - `stage`, `status`
 - `scan_ms`, `convert_ms`, `export_ms`, `chunk_ms`
 - `error_code`, `error_message`, `error_details_json`
+- `external_uuid`
 
 Example poll:
 
@@ -176,12 +180,20 @@ Filters:
 - `status`
 - `stage`
 - `document_id`
+- `external_uuid`
 - `created_after` / `created_before` (ISO 8601)
+- `updated_after` (ISO 8601, uses `modified_at`)
 
 Example:
 
 ```
 GET /v1/jobs/?status=FAILED&created_after=2026-01-01T00:00:00
+```
+
+Example (changes since timestamp):
+
+```
+GET /v1/jobs/?updated_after=2026-02-01T12:00:00
 ```
 
 ## Cancel / retry jobs
@@ -251,3 +263,73 @@ timeout) and return progress in your UI.
 - `403` / `401`: check API key and scopes.
 - `404` for artifacts: ingestion not finished or artifact not produced.
 - Stuck jobs: check worker status via `/v1/dashboard/workers`.
+
+## Webhooks (optional)
+
+Create a webhook endpoint:
+
+```
+POST /v1/webhooks/
+```
+
+Fields:
+- `name` (required)
+- `url` (required)
+- `secret` (optional) — used for HMAC signing
+- `events` (optional, list of strings) — defaults to `["job.updated"]`
+- `enabled` (optional, boolean) — defaults to `true`
+
+List endpoints:
+
+```
+GET /v1/webhooks/
+```
+
+Job update event:
+- `event`: `job.updated`
+- Fired when `status` or `stage` changes.
+
+Example payload:
+
+```json
+{
+  "event": "job.updated",
+  "job_id": 123,
+  "job_uuid": "9c1c3a6a-0a3a-4c45-9b6c-9a33f6c8b1a2",
+  "document_id": 456,
+  "external_uuid": "2f3b12aa-7c4b-4d2e-8a01-8b9d6b6d8d4f",
+  "status": "RUNNING",
+  "stage": "CONVERTING",
+  "previous_status": "QUEUED",
+  "previous_stage": "SCANNING",
+  "error_code": "",
+  "error_message": "",
+  "error_details": null,
+  "queued_at": "2026-02-03T12:00:00Z",
+  "started_at": "2026-02-03T12:00:05Z",
+  "finished_at": null,
+  "created_at": "2026-02-03T12:00:00Z",
+  "modified_at": "2026-02-03T12:00:05Z"
+}
+```
+
+Signature headers (if `secret` is set):
+- `X-DocRefinery-Signature: sha256=<hex>` — HMAC SHA-256 of the raw request body
+- `X-DocRefinery-Event: job.updated`
+- `X-DocRefinery-Delivery: <uuid>`
+
+## Reducing polling load
+
+Job tracking can rely on polling. For high volume or long-running jobs, this
+creates unnecessary API traffic and delays status updates. The current approach
+most integrators use:
+
+1) Upload document and store the returned `job_id`.
+2) Poll `GET /v1/jobs/{id}/` on a backoff schedule.
+3) On completion, download artifacts and start downstream processing.
+
+If you need lower polling overhead, use:
+
+- Webhooks to receive `job.updated` on status or stage changes.
+- `GET /v1/jobs/?updated_after=<timestamp>` to pull only changed jobs.
+- `external_uuid` to reconcile jobs and documents with your internal IDs.
