@@ -127,3 +127,26 @@ class TestJobFilters(TestCase):
         response = self.client.get("/v1/jobs/?updated_after=not-a-date")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
+
+    def test_comparison_id_filter(self):
+        comparison_id = uuid.uuid4()
+        job_match = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=self.doc,
+            status=IngestionJobStatus.QUEUED,
+            stage=IngestionStage.SCANNING,
+            comparison_id=comparison_id,
+        )
+        IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=self.doc,
+            status=IngestionJobStatus.QUEUED,
+            stage=IngestionStage.SCANNING,
+        )
+
+        response = self.client.get(f"/v1/jobs/?comparison_id={comparison_id}")
+        self.assertEqual(response.status_code, 200)
+        ids = {row["id"] for row in response.data}
+        self.assertIn(job_match.id, ids)

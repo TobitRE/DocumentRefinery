@@ -163,6 +163,7 @@ Stage values:
 Useful fields:
 - `stage`, `status`
 - `profile`
+- `comparison_id`
 - `scan_ms`, `convert_ms`, `export_ms`, `chunk_ms`
 - `error_code`, `error_message`, `error_details_json`
 - `external_uuid`
@@ -213,6 +214,7 @@ Filters:
 - `stage`
 - `document_id`
 - `external_uuid`
+- `comparison_id`
 - `created_after` / `created_before` (ISO 8601)
 - `updated_after` (ISO 8601, uses `modified_at`)
 
@@ -226,6 +228,40 @@ Example (changes since timestamp):
 
 ```
 GET /v1/jobs/?updated_after=2026-02-01T12:00:00
+```
+
+## Compare quality profiles
+
+To run the same document with multiple profiles and compare the results,
+call the compare endpoint. This creates multiple jobs that share a
+`comparison_id` you can use to fetch or reconcile results.
+
+```
+POST /v1/documents/{id}/compare/
+```
+
+Body (JSON):
+- `profiles` (required, list of strings) — e.g. `["fast_text", "structured"]`
+- `options_json` (optional) — base Docling options applied to each profile
+
+Response:
+- `comparison_id`
+- `document_id`
+- `jobs` (list of `{job_id, profile}`)
+
+Example:
+
+```json
+{
+  "profiles": ["fast_text", "structured"],
+  "options_json": {"max_num_pages": 50}
+}
+```
+
+Use `comparison_id` to fetch all jobs:
+
+```
+GET /v1/jobs/?comparison_id=<id>
 ```
 
 ## Cancel / retry jobs

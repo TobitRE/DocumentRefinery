@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from authn.models import APIKey, Tenant
-from documents.models import Document
+from documents.models import Document, IngestionJob, IngestionJobStatus, IngestionStage
 
 
 class TestDocumentUpload(TestCase):
@@ -209,3 +209,84 @@ class TestDocumentScope(TestCase):
         response = self.client.get("/v1/documents/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 0)
+
+
+class TestDocumentCompare(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.tenant = Tenant.objects.create(name="Acme", slug="acme")
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        self.raw_key = raw_key
+        self.api_key = APIKey.objects.create(
+            tenant=self.tenant,
+            name="Primary",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=["documents:write", "jobs:read"],
+            active=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
+
+    def _make_document(self, data_root: str):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="c" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/a/a.pdf",
+        )
+        clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+        clean_abs = os.path.join(data_root, clean_relpath)
+        os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+        with open(clean_abs, "wb") as handle:
+            handle.write(b"%PDF-1.4 fake\n")
+        doc.storage_relpath_clean = clean_relpath
+        doc.save(update_fields=["storage_relpath_clean"])
+        return doc
+
+    def test_compare_creates_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document(tmpdir)
+            with patch("documents.views.start_ingestion_pipeline"):
+                response = self.client.post(
+                    f"/v1/documents/{doc.id}/compare/",
+                    {"profiles": ["fast_text", "structured"]},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 201)
+            comparison_id = response.data.get("comparison_id")
+            self.assertTrue(comparison_id)
+            jobs = response.data.get("jobs")
+            self.assertEqual(len(jobs), 2)
+
+            job_profiles = {item["profile"] for item in jobs}
+            self.assertEqual(job_profiles, {"fast_text", "structured"})
+
+            stored = IngestionJob.objects.filter(comparison_id=comparison_id)
+            self.assertEqual(stored.count(), 2)
+            for job in stored:
+                self.assertTrue(job.source_relpath)
+                self.assertTrue(os.path.exists(os.path.join(tmpdir, job.source_relpath)))
+                self.assertEqual(job.status, IngestionJobStatus.QUEUED)
+                self.assertEqual(job.stage, IngestionStage.SCANNING)
+
+    def test_compare_missing_source_file(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="d" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/a/a.pdf",
+        )
+        response = self.client.post(
+            f"/v1/documents/{doc.id}/compare/",
+            {"profiles": ["fast_text"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error_code"], "MISSING_SOURCE_FILE")

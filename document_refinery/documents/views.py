@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shutil
 import uuid
 
 from django.conf import settings
@@ -30,6 +31,7 @@ from .profiles import apply_profile_to_options
 from .serializers import (
     ArtifactSerializer,
     DocumentSerializer,
+    DocumentCompareSerializer,
     DocumentUploadSerializer,
     JobSerializer,
     WebhookEndpointSerializer,
@@ -49,7 +51,7 @@ class DocumentViewSet(
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
             self.required_scopes = ["documents:read"]
-        elif self.action in ("create",):
+        elif self.action in ("create", "compare"):
             self.required_scopes = ["documents:write"]
         else:
             self.required_scopes = []
@@ -178,6 +180,77 @@ class DocumentViewSet(
             payload["job_id"] = job_id
         return Response(payload, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=["post"], url_path="compare")
+    def compare(self, request, pk=None):
+        document = self.get_object()
+        serializer = DocumentCompareSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profiles = serializer.validated_data["profiles"]
+        base_options = serializer.validated_data.get("options_json", None)
+
+        source_path = document.get_quarantine_path()
+        if source_path and os.path.exists(source_path):
+            source_abs = source_path
+        else:
+            clean_path = document.get_clean_path()
+            if not clean_path or not os.path.exists(clean_path):
+                return Response(
+                    {"error_code": "MISSING_SOURCE_FILE", "message": "Document file is missing."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            source_abs = clean_path
+
+        comparison_id = uuid.uuid4()
+        jobs = []
+        for profile in profiles:
+            options_json = (
+                base_options
+                or request.auth.docling_options_json
+                or getattr(request.auth.tenant, "docling_options_json", None)
+                or settings.DOC_DEFAULT_OPTIONS
+                or {}
+            )
+            options_json = apply_profile_to_options(options_json, profile)
+            try:
+                validate_docling_options(options_json)
+            except ValidationError as exc:
+                message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+                return Response(
+                    {"error_code": "INVALID_OPTIONS", "message": message},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            relpath = os.path.join(
+                "uploads",
+                "quarantine",
+                str(document.tenant_id),
+                f"{document.uuid}-{uuid.uuid4()}.pdf",
+            )
+            abs_path = os.path.join(settings.DATA_ROOT, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            shutil.copy2(source_abs, abs_path)
+
+            job = IngestionJob.objects.create(
+                tenant=request.auth.tenant,
+                created_by_key=request.auth,
+                document=document,
+                external_uuid=document.external_uuid,
+                profile=profile,
+                comparison_id=comparison_id,
+                source_relpath=relpath,
+                status=IngestionJobStatus.QUEUED,
+                stage=IngestionStage.SCANNING,
+                queued_at=timezone.now(),
+                options_json=options_json or {},
+            )
+            start_ingestion_pipeline(job.id)
+            jobs.append({"job_id": job.id, "profile": profile})
+
+        return Response(
+            {"comparison_id": str(comparison_id), "document_id": document.id, "jobs": jobs},
+            status=status.HTTP_201_CREATED,
+        )
+
 
 class ArtifactViewSet(
     mixins.ListModelMixin,
@@ -278,6 +351,13 @@ class JobViewSet(
             except ValueError:
                 return IngestionJob.objects.none()
             queryset = queryset.filter(external_uuid=parsed)
+        comparison_id = self.request.query_params.get("comparison_id")
+        if comparison_id:
+            try:
+                parsed = uuid.UUID(comparison_id)
+            except ValueError:
+                return IngestionJob.objects.none()
+            queryset = queryset.filter(comparison_id=parsed)
         status_param = self.request.query_params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)

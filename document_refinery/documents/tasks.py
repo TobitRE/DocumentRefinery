@@ -221,7 +221,11 @@ def scan_pdf_task(self, job_id: int) -> int:
 
     start = time.monotonic()
     document = job.document
-    abs_path = document.get_quarantine_path()
+    relpath = job.source_relpath or document.storage_relpath_quarantine
+    abs_path = os.path.join(settings.DATA_ROOT, relpath) if relpath else ""
+    if not abs_path or not os.path.exists(abs_path):
+        _mark_failed(job, "MISSING_SOURCE_FILE", "Source file is missing for scan.")
+        raise RuntimeError("Missing source file")
 
     try:
         scanner = clamd.ClamdNetworkSocket(settings.CLAMAV_HOST, settings.CLAMAV_PORT)
@@ -443,6 +447,7 @@ def _job_webhook_payload(job: IngestionJob, prev_status: str | None, prev_stage:
         "document_id": job.document_id,
         "external_uuid": str(job.external_uuid) if job.external_uuid else None,
         "profile": job.profile or None,
+        "comparison_id": str(job.comparison_id) if job.comparison_id else None,
         "status": job.status,
         "stage": job.stage,
         "previous_status": prev_status,

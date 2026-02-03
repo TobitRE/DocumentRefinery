@@ -29,6 +29,13 @@ class DocumentUploadSerializer(serializers.Serializer):
     profile = serializers.ChoiceField(choices=PROFILE_NAMES, required=False)
 
 
+class DocumentCompareSerializer(serializers.Serializer):
+    profiles = serializers.ListField(
+        child=serializers.ChoiceField(choices=PROFILE_NAMES), allow_empty=False
+    )
+    options_json = serializers.JSONField(required=False)
+
+
 class ArtifactSerializer(serializers.ModelSerializer):
     class Meta:
         model = Artifact
@@ -52,6 +59,7 @@ class JobSerializer(serializers.ModelSerializer):
             "document_id",
             "external_uuid",
             "profile",
+            "comparison_id",
             "status",
             "stage",
             "queued_at",

@@ -90,6 +90,8 @@ class IngestionJob(BaseModel):
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="jobs")
     external_uuid = models.UUIDField(null=True, blank=True, db_index=True)
     profile = models.CharField(max_length=50, blank=True, null=True)
+    comparison_id = models.UUIDField(null=True, blank=True, db_index=True)
+    source_relpath = models.CharField(max_length=500, blank=True, null=True)
     status = models.CharField(
         max_length=20,
         choices=IngestionJobStatus.choices,
@@ -126,6 +128,7 @@ class IngestionJob(BaseModel):
             models.Index(fields=["tenant", "status"]),
             models.Index(fields=["tenant", "stage"]),
             models.Index(fields=["document"]),
+            models.Index(fields=["comparison_id"]),
         ]
 
     def __str__(self) -> str:

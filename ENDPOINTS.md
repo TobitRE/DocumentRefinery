@@ -4,6 +4,7 @@ Auth: `Authorization: Api-Key <token>`
 
 ## Documents
 - `POST /v1/documents/` — upload PDF (multipart `file`, optional `ingest`, `options_json`, `profile`, `external_uuid`)
+- `POST /v1/documents/{id}/compare/` — create comparison jobs for a document (JSON body `profiles`, optional `options_json`)
 - `GET /v1/documents/` — list documents (tenant-scoped)
 - `GET /v1/documents/{id}/` — document detail (tenant-scoped)
 
@@ -12,7 +13,7 @@ Auth: `Authorization: Api-Key <token>`
 - `GET /v1/artifacts/{id}/` — download artifact
 
 ## Jobs
-- `GET /v1/jobs/` — list jobs (filters: `status`, `stage`, `document_id`, `created_after`, `created_before`)  
+- `GET /v1/jobs/` — list jobs (filters: `status`, `stage`, `document_id`, `external_uuid`, `comparison_id`, `created_after`, `created_before`, `updated_after`)  
   - `created_after`/`created_before` must be ISO8601 (e.g. `2026-01-31T12:00:00`)
 - `GET /v1/jobs/{id}/` — job detail
 - `POST /v1/jobs/{id}/cancel/` — cancel a queued/running job (best-effort; attempts to revoke worker task)

@@ -55,9 +55,11 @@ class TestWebhookQueue(TestCase):
             enabled=True,
         )
         external_uuid = uuid.uuid4()
+        comparison_id = uuid.uuid4()
         self.job.status = IngestionJobStatus.RUNNING
         self.job.stage = IngestionStage.CONVERTING
         self.job.external_uuid = external_uuid
+        self.job.comparison_id = comparison_id
         self.job.profile = "fast_text"
         self.job.save()
 
@@ -69,6 +71,7 @@ class TestWebhookQueue(TestCase):
         self.assertEqual(delivery.payload_json.get("job_id"), self.job.id)
         self.assertEqual(delivery.payload_json.get("external_uuid"), str(external_uuid))
         self.assertEqual(delivery.payload_json.get("profile"), "fast_text")
+        self.assertEqual(delivery.payload_json.get("comparison_id"), str(comparison_id))
         delay.assert_called_once_with(delivery.id)
 
     def test_queue_skips_when_no_change(self):
