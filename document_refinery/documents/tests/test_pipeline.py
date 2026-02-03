@@ -8,6 +8,7 @@ from django.utils import timezone
 from authn.models import APIKey, Tenant
 from documents.models import Artifact, ArtifactKind, Document, IngestionJob, IngestionJobStatus, IngestionStage
 from documents.tasks import docling_convert_task, export_artifacts_task, scan_pdf_task
+from docling.datamodel.base_models import InputFormat
 
 
 class TestPipelineTasks(TestCase):
@@ -121,6 +122,46 @@ class TestPipelineTasks(TestCase):
             self.assertEqual(job.status, IngestionJobStatus.RUNNING)
             kinds = set(Artifact.objects.filter(job=job).values_list("kind", flat=True))
             self.assertIn(ArtifactKind.DOCLING_JSON, kinds)
+
+    def test_convert_uses_profile_pipeline_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+
+            job.profile = "fast_text"
+            job.save(update_fields=["profile"])
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling.datamodel.document import DoclingDocument
+
+            captured = {}
+
+            class DummyConverter:
+                def __init__(self, *args, **kwargs):
+                    captured["format_options"] = kwargs.get("format_options")
+
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with patch("documents.tasks.DocumentConverter", DummyConverter):
+                docling_convert_task(job.id)
+
+            format_options = captured.get("format_options")
+            self.assertIsNotNone(format_options)
+            pdf_option = format_options.get(InputFormat.PDF)
+            self.assertIsNotNone(pdf_option)
+            pipeline_options = pdf_option.pipeline_options
+            self.assertFalse(pipeline_options.do_ocr)
+            self.assertFalse(pipeline_options.do_table_structure)
 
 
 class TestCleanupTasks(TestCase):

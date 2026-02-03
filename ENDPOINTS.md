@@ -3,7 +3,7 @@
 Auth: `Authorization: Api-Key <token>`
 
 ## Documents
-- `POST /v1/documents/` — upload PDF (multipart `file`, optional `ingest`, `options_json`)
+- `POST /v1/documents/` — upload PDF (multipart `file`, optional `ingest`, `options_json`, `profile`, `external_uuid`)
 - `GET /v1/documents/` — list documents (tenant-scoped)
 - `GET /v1/documents/{id}/` — document detail (tenant-scoped)
 

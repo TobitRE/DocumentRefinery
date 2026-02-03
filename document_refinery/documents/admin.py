@@ -23,6 +23,7 @@ class IngestionJobAdmin(admin.ModelAdmin):
         "id",
         "tenant",
         "document",
+        "profile",
         "status",
         "stage",
         "duration_ms",

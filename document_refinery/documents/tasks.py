@@ -14,7 +14,8 @@ from django.utils import timezone
 
 from clamav_client import clamd
 from docling.datamodel.document import DoclingDocument, DoclingVersion
-from docling.document_converter import DocumentConverter
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat
 
 from .models import (
     Artifact,
@@ -28,6 +29,7 @@ from .models import (
     WebhookDeliveryStatus,
     WebhookEndpoint,
 )
+from .profiles import build_profile_pipeline_options
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
 
@@ -254,7 +256,15 @@ def docling_convert_task(self, job_id: int) -> int:
         max_file_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
 
     try:
-        converter = DocumentConverter()
+        pipeline_options = build_profile_pipeline_options(job.profile)
+        if pipeline_options:
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+            )
+        else:
+            converter = DocumentConverter()
         result = converter.convert(
             document.get_clean_path(),
             max_num_pages=max_pages,
@@ -371,6 +381,7 @@ def _job_webhook_payload(job: IngestionJob, prev_status: str | None, prev_stage:
         "job_uuid": str(job.uuid),
         "document_id": job.document_id,
         "external_uuid": str(job.external_uuid) if job.external_uuid else None,
+        "profile": job.profile or None,
         "status": job.status,
         "stage": job.stage,
         "previous_status": prev_status,

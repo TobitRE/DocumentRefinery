@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import Artifact, Document, IngestionJob, WebhookEndpoint
+from .profiles import PROFILE_NAMES
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -25,6 +26,7 @@ class DocumentUploadSerializer(serializers.Serializer):
     ingest = serializers.BooleanField(required=False, default=False)
     options_json = serializers.JSONField(required=False)
     external_uuid = serializers.UUIDField(required=False)
+    profile = serializers.ChoiceField(choices=PROFILE_NAMES, required=False)
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
@@ -49,6 +51,7 @@ class JobSerializer(serializers.ModelSerializer):
             "id",
             "document_id",
             "external_uuid",
+            "profile",
             "status",
             "stage",
             "queued_at",

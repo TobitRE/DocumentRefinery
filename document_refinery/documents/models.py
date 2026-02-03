@@ -89,6 +89,7 @@ class IngestionJob(BaseModel):
     )
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="jobs")
     external_uuid = models.UUIDField(null=True, blank=True, db_index=True)
+    profile = models.CharField(max_length=50, blank=True, null=True)
     status = models.CharField(
         max_length=20,
         choices=IngestionJobStatus.choices,

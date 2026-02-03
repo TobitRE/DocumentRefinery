@@ -61,3 +61,27 @@ class TestExternalUUID(TestCase):
         job_response = self.client.get(f"/v1/jobs/{job_id}/")
         self.assertEqual(job_response.status_code, 200)
         self.assertEqual(job_response.data["external_uuid"], str(external_uuid))
+
+    def test_job_payload_includes_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            external_uuid = uuid.uuid4()
+            pdf_bytes = b"%PDF-1.4 test\n"
+            upload = SimpleUploadedFile("sample.pdf", pdf_bytes, content_type="application/pdf")
+            with patch("documents.views.start_ingestion_pipeline"):
+                response = self.client.post(
+                    "/v1/documents/",
+                    {
+                        "file": upload,
+                        "external_uuid": str(external_uuid),
+                        "profile": "fast_text",
+                        "ingest": "true",
+                    },
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        job_id = response.data.get("job_id")
+        self.assertIsNotNone(job_id)
+        job_response = self.client.get(f"/v1/jobs/{job_id}/")
+        self.assertEqual(job_response.status_code, 200)
+        self.assertEqual(job_response.data["profile"], "fast_text")

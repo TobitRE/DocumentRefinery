@@ -26,6 +26,7 @@ from .models import (
     WebhookEndpoint,
 )
 from .tasks import queue_job_webhooks, start_ingestion_pipeline
+from .profiles import apply_profile_to_options
 from .serializers import (
     ArtifactSerializer,
     DocumentSerializer,
@@ -66,6 +67,7 @@ class DocumentViewSet(
         ingest = serializer.validated_data.get("ingest", False)
         options_json = serializer.validated_data.get("options_json", None)
         external_uuid = serializer.validated_data.get("external_uuid", None)
+        profile = serializer.validated_data.get("profile", None)
 
         if uploaded.content_type not in ("application/pdf", "application/x-pdf"):
             return Response(
@@ -118,6 +120,13 @@ class DocumentViewSet(
         doc.sha256 = hasher.hexdigest()
         doc.size_bytes = size_bytes
         doc.storage_relpath_quarantine = relpath
+        if Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).exists():
+            if os.path.exists(abs_path):
+                os.remove(abs_path)
+            return Response(
+                {"error_code": "DUPLICATE_DOCUMENT", "message": "Document already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
             doc.save()
         except IntegrityError:
@@ -137,6 +146,7 @@ class DocumentViewSet(
                 or settings.DOC_DEFAULT_OPTIONS
                 or {}
             )
+            options_json = apply_profile_to_options(options_json, profile)
             try:
                 validate_docling_options(options_json)
             except ValidationError as exc:
@@ -154,6 +164,7 @@ class DocumentViewSet(
                 created_by_key=api_key,
                 document=doc,
                 external_uuid=doc.external_uuid,
+                profile=profile,
                 status=IngestionJobStatus.QUEUED,
                 stage=IngestionStage.SCANNING,
                 queued_at=timezone.now(),

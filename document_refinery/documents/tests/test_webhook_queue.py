@@ -58,6 +58,7 @@ class TestWebhookQueue(TestCase):
         self.job.status = IngestionJobStatus.RUNNING
         self.job.stage = IngestionStage.CONVERTING
         self.job.external_uuid = external_uuid
+        self.job.profile = "fast_text"
         self.job.save()
 
         with patch("documents.tasks.deliver_webhook_delivery.delay") as delay:
@@ -67,6 +68,7 @@ class TestWebhookQueue(TestCase):
         delivery = WebhookDelivery.objects.get(endpoint=endpoint)
         self.assertEqual(delivery.payload_json.get("job_id"), self.job.id)
         self.assertEqual(delivery.payload_json.get("external_uuid"), str(external_uuid))
+        self.assertEqual(delivery.payload_json.get("profile"), "fast_text")
         delay.assert_called_once_with(delivery.id)
 
     def test_queue_skips_when_no_change(self):

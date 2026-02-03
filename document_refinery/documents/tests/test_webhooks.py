@@ -126,3 +126,63 @@ class TestWebhookDelivery(TestCase):
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, WebhookDeliveryStatus.FAILED)
         self.assertIsNone(delivery.next_retry_at)
+
+    def test_deliver_noop_when_already_delivered(self):
+        endpoint = WebhookEndpoint.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            name="Test",
+            url="https://example.com/webhook",
+            secret="",
+            events=["job.updated"],
+        )
+        delivery = WebhookDelivery.objects.create(
+            endpoint=endpoint,
+            event_type="job.updated",
+            payload_json={"event": "job.updated"},
+            status=WebhookDeliveryStatus.DELIVERED,
+        )
+
+        result = deliver_webhook_delivery.apply(args=[delivery.id]).result
+        self.assertTrue(result)
+
+    def test_deliver_noop_when_failed(self):
+        endpoint = WebhookEndpoint.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            name="Test",
+            url="https://example.com/webhook",
+            secret="",
+            events=["job.updated"],
+        )
+        delivery = WebhookDelivery.objects.create(
+            endpoint=endpoint,
+            event_type="job.updated",
+            payload_json={"event": "job.updated"},
+            status=WebhookDeliveryStatus.FAILED,
+        )
+
+        result = deliver_webhook_delivery.apply(args=[delivery.id]).result
+        self.assertFalse(result)
+
+    def test_deliver_marks_failed_when_endpoint_disabled(self):
+        endpoint = WebhookEndpoint.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            name="Test",
+            url="https://example.com/webhook",
+            secret="",
+            events=["job.updated"],
+            enabled=False,
+        )
+        delivery = WebhookDelivery.objects.create(
+            endpoint=endpoint,
+            event_type="job.updated",
+            payload_json={"event": "job.updated"},
+        )
+
+        result = deliver_webhook_delivery.apply(args=[delivery.id]).result
+        self.assertFalse(result)
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, WebhookDeliveryStatus.FAILED)
+        self.assertEqual(delivery.last_error, "Endpoint disabled")

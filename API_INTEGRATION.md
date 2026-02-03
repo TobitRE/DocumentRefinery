@@ -49,6 +49,7 @@ Multipart fields:
 - `file` (required) — PDF file
 - `ingest` (optional, boolean) — set `true` to start processing
 - `options_json` (optional) — Docling options JSON
+- `profile` (optional) — extraction profile name
 - `external_uuid` (optional, UUID) — your correlation ID, echoed on documents and jobs
 
 Constraints:
@@ -61,6 +62,30 @@ Docling options (current support):
 - `exports` (list of strings) — controls which artifacts are generated. Default: `["markdown", "text", "doctags"]`.
 - `ocr` (bool) — validated but not yet wired to the converter (reserved).
 - `ocr_languages` (list of strings) — validated but not yet wired (reserved).
+
+### Extraction profiles
+
+If you want to avoid sending Docling options on every request, use `profile`.
+When a profile is provided, DocRefinery sets the pipeline options internally
+and overrides `exports` with the profile defaults (other `options_json` keys
+like `max_num_pages` are still honored).
+
+Supported profiles:
+- `fast_text` — born-digital PDFs, lowest latency.
+- `ocr_only` — scanned PDFs, OCR-only.
+- `structured` — OCR + table/layout focus.
+- `full_vlm` — OCR + tables + image enrichment (highest fidelity).
+
+Profile defaults (current):
+- `fast_text`: `do_ocr=False`, `do_table_structure=False`, `do_picture_description=False`,
+  `do_picture_classification=False`, exports `["text", "markdown", "doctags"]`.
+- `ocr_only`: `do_ocr=True`, `ocr_options.lang=["auto"]`, `force_full_page_ocr=True`,
+  no table/image enrichments, exports `["text", "markdown", "doctags"]`.
+- `structured`: `do_ocr=True`, `do_table_structure=True`, `generate_parsed_pages=True`,
+  exports `["text", "markdown", "doctags", "chunks_json"]`.
+- `full_vlm`: `do_ocr=True`, `do_table_structure=True`, `do_picture_description=True`,
+  `do_picture_classification=True`, `generate_picture_images=True`, `images_scale=2.0`,
+  exports `["text", "markdown", "doctags", "chunks_json", "figures_zip"]`.
 
 Unknown keys are accepted but currently ignored unless implemented in the pipeline.
 If `options_json` is omitted, defaults come from the API key or tenant settings.
@@ -137,6 +162,7 @@ Stage values:
 
 Useful fields:
 - `stage`, `status`
+- `profile`
 - `scan_ms`, `convert_ms`, `export_ms`, `chunk_ms`
 - `error_code`, `error_message`, `error_details_json`
 - `external_uuid`

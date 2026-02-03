@@ -73,6 +73,63 @@
     </div>
   </section>
 
+  <section class="grid">
+    <div class="card">
+      <h3>Upload document</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="uploadFile">PDF file</label>
+          <input type="file" id="uploadFile" accept="application/pdf" />
+        </div>
+        <div class="field">
+          <label for="uploadExternalUuid">External UUID (optional)</label>
+          <input type="text" id="uploadExternalUuid" placeholder="e.g. 2f3b12aa-7c4b-4d2e-8a01-8b9d6b6d8d4f" />
+        </div>
+        <div class="field">
+          <label for="uploadProfile">Profile (optional)</label>
+          <select id="uploadProfile">
+            <option value="">No profile</option>
+            <option value="fast_text">fast_text</option>
+            <option value="ocr_only">ocr_only</option>
+            <option value="structured">structured</option>
+            <option value="full_vlm">full_vlm</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="uploadOptionsJson">Docling options JSON (optional)</label>
+          <textarea id="uploadOptionsJson" placeholder='{"max_num_pages": 50, "exports": ["markdown","text"]}'></textarea>
+        </div>
+        <div class="row">
+          <label class="pill">
+            <input type="checkbox" id="uploadIngest" checked />
+            Start ingestion
+          </label>
+        </div>
+        <div class="actions">
+          <button id="uploadBtn">Upload</button>
+          <button class="ghost" id="clearUploadBtn" type="button">Clear</button>
+        </div>
+        <div class="panel" id="uploadResult">No upload yet.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Job status</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="jobIdInput">Job ID</label>
+          <input type="text" id="jobIdInput" placeholder="Enter job id to fetch" />
+        </div>
+        <div class="actions">
+          <button class="secondary" id="fetchJobBtn">Fetch status</button>
+          <button class="ghost" id="togglePollBtn" type="button">Start polling</button>
+        </div>
+        <div class="panel" id="jobStatusPanel">No job loaded.</div>
+        <div class="panel" id="artifactPanel">No artifacts.</div>
+      </div>
+    </div>
+  </section>
+
   <section class="card">
     <h3>Recent failures</h3>
     <div class="list" id="recentFailures">—</div>
@@ -87,6 +144,20 @@
     const refreshBtn = document.getElementById("refreshBtn");
     const autoRefresh = document.getElementById("autoRefresh");
     const lastUpdated = document.getElementById("lastUpdated");
+    const uploadFile = document.getElementById("uploadFile");
+    const uploadExternalUuid = document.getElementById("uploadExternalUuid");
+    const uploadProfile = document.getElementById("uploadProfile");
+    const uploadOptionsJson = document.getElementById("uploadOptionsJson");
+    const uploadIngest = document.getElementById("uploadIngest");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const clearUploadBtn = document.getElementById("clearUploadBtn");
+    const uploadResult = document.getElementById("uploadResult");
+    const jobIdInput = document.getElementById("jobIdInput");
+    const fetchJobBtn = document.getElementById("fetchJobBtn");
+    const togglePollBtn = document.getElementById("togglePollBtn");
+    const jobStatusPanel = document.getElementById("jobStatusPanel");
+    const artifactPanel = document.getElementById("artifactPanel");
+    let pollTimer = null;
 
     const fields = {
       queued: document.getElementById("statQueued"),
@@ -138,6 +209,17 @@
         throw new Error(msg);
       }
       return res.json();
+    }
+
+    async function fetchAuthorized(path, options = {}) {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Add an API key to load data.", true);
+        throw new Error("missing key");
+      }
+      const headers = options.headers || {};
+      headers.Authorization = `Api-Key ${key}`;
+      return fetch(path, { ...options, headers });
     }
 
     function renderSummary(data) {
@@ -253,6 +335,176 @@
       fields.metrics.textContent = data.metrics?.text || "—";
     }
 
+    function renderJobStatus(job) {
+      if (!job) {
+        jobStatusPanel.textContent = "No job loaded.";
+        return;
+      }
+      const status = job.status || "—";
+      const stage = job.stage || "—";
+      const error = job.error_code ? `${job.error_code}: ${job.error_message || ""}` : "—";
+      jobStatusPanel.innerHTML = `
+        <div class="list">
+          <div class="pill">Status: ${status}</div>
+          <div class="pill">Stage: ${stage}</div>
+          <div class="pill">External UUID: ${job.external_uuid || "—"}</div>
+          <div class="pill">Profile: ${job.profile || "—"}</div>
+          <div class="pill">Queued: ${job.queued_at || "—"}</div>
+          <div class="pill">Started: ${job.started_at || "—"}</div>
+          <div class="pill">Finished: ${job.finished_at || "—"}</div>
+          <div class="pill">Error: ${error}</div>
+        </div>
+      `;
+    }
+
+    function renderArtifacts(items) {
+      if (!items || !items.length) {
+        artifactPanel.textContent = "No artifacts.";
+        return;
+      }
+      artifactPanel.innerHTML = items
+        .map(
+          (item) => `
+            <div class="row" style="justify-content: space-between;">
+              <div class="mono">${item.kind} · ${item.size_bytes ?? "—"} bytes</div>
+              <button class="secondary" data-artifact="${item.id}" data-kind="${item.kind}">Download</button>
+            </div>
+          `
+        )
+        .join("");
+      artifactPanel.querySelectorAll("button[data-artifact]").forEach((btn) => {
+        btn.addEventListener("click", () => downloadArtifact(btn.dataset.artifact, btn.dataset.kind));
+      });
+    }
+
+    async function downloadArtifact(artifactId, kind) {
+      try {
+        const res = await fetchAuthorized(`/v1/artifacts/${artifactId}/`);
+        if (!res.ok) {
+          setStatus(`Artifact download failed (${res.status})`, true);
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = kind || "artifact";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        setStatus("Failed to download artifact.", true);
+      }
+    }
+
+    async function fetchJob(jobId, withArtifacts = true) {
+      if (!jobId) {
+        setStatus("Provide a job id.", true);
+        return;
+      }
+      try {
+        const job = await fetchJson(`/v1/jobs/${jobId}/`);
+        renderJobStatus(job);
+        if (withArtifacts && job.status === "SUCCEEDED") {
+          const artifacts = await fetchJson(`/v1/artifacts/?job_id=${jobId}`);
+          renderArtifacts(artifacts);
+        }
+        if (["SUCCEEDED", "FAILED", "CANCELED", "QUARANTINED"].includes(job.status)) {
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            togglePollBtn.textContent = "Start polling";
+          }
+        }
+      } catch (err) {
+        renderJobStatus(null);
+      }
+    }
+
+    async function uploadDocument() {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Select an API key before uploading.", true);
+        return;
+      }
+      if (!uploadFile.files.length) {
+        setStatus("Select a PDF file to upload.", true);
+        return;
+      }
+      const form = new FormData();
+      form.append("file", uploadFile.files[0]);
+      if (uploadIngest.checked) {
+        form.append("ingest", "true");
+      }
+      const externalUuid = uploadExternalUuid.value.trim();
+      if (externalUuid) {
+        form.append("external_uuid", externalUuid);
+      }
+      const profile = uploadProfile.value;
+      if (profile) {
+        form.append("profile", profile);
+      }
+      const optionsRaw = uploadOptionsJson.value.trim();
+      if (optionsRaw) {
+        try {
+          JSON.parse(optionsRaw);
+        } catch (err) {
+          setStatus("Options JSON is invalid.", true);
+          return;
+        }
+        form.append("options_json", optionsRaw);
+      }
+
+      uploadResult.textContent = "Uploading...";
+      try {
+        const res = await fetchAuthorized("/v1/documents/", {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) {
+          setStatus(`Upload failed (${res.status})`, true);
+          uploadResult.textContent = "Upload failed.";
+          return;
+        }
+        const payload = await res.json();
+        uploadResult.innerHTML = `Document ${payload.id} · SHA ${payload.sha256 || "—"} · Job ${payload.job_id || "—"}`;
+        if (payload.job_id) {
+          jobIdInput.value = payload.job_id;
+          await fetchJob(payload.job_id);
+        }
+      } catch (err) {
+        setStatus("Upload failed.", true);
+        uploadResult.textContent = "Upload failed.";
+      }
+    }
+
+    function togglePolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        togglePollBtn.textContent = "Start polling";
+        return;
+      }
+      const jobId = jobIdInput.value.trim();
+      if (!jobId) {
+        setStatus("Provide a job id before polling.", true);
+        return;
+      }
+      togglePollBtn.textContent = "Stop polling";
+      pollTimer = setInterval(() => fetchJob(jobId), 3000);
+      fetchJob(jobId);
+    }
+
+    function clearUpload() {
+      uploadFile.value = "";
+      uploadExternalUuid.value = "";
+      uploadProfile.value = "";
+      uploadOptionsJson.value = "";
+      uploadIngest.checked = true;
+      uploadResult.textContent = "No upload yet.";
+    }
+
     async function refresh() {
       setStatus("Loading...");
       try {
@@ -279,6 +531,22 @@
       refresh();
     });
     refreshBtn.addEventListener("click", refresh);
+    uploadBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      uploadDocument();
+    });
+    clearUploadBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      clearUpload();
+    });
+    fetchJobBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      fetchJob(jobIdInput.value.trim());
+    });
+    togglePollBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      togglePolling();
+    });
     autoRefresh.addEventListener("change", () => {
       if (autoRefresh.checked) {
         setStatus("Auto-refresh enabled.");
