@@ -1,5 +1,8 @@
+import base64
+import json
 import os
 import tempfile
+import zipfile
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -162,6 +165,67 @@ class TestPipelineTasks(TestCase):
             pipeline_options = pdf_option.pipeline_options
             self.assertFalse(pipeline_options.do_ocr)
             self.assertFalse(pipeline_options.do_table_structure)
+
+    def test_export_artifacts_writes_chunks_and_figures(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+
+            job.options_json = {
+                "exports": ["markdown", "text", "doctags", "chunks_json", "figures_zip"]
+            }
+            job.save(update_fields=["options_json"])
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import ImageRef, PictureItem, Size
+
+            image_bytes = b"fakeimage"
+            image_uri = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
+            docling_doc = DoclingDocument(name="test")
+            docling_doc.pictures.append(
+                PictureItem(
+                    self_ref="#/pictures/0",
+                    image=ImageRef(
+                        mimetype="image/png",
+                        dpi=72,
+                        size=Size(width=1, height=1),
+                        uri=image_uri,
+                    ),
+                )
+            )
+
+            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
+                mock_convert.return_value = DummyResult(docling_doc)
+                docling_convert_task(job.id)
+
+            export_artifacts_task(job.id)
+
+            kinds = set(Artifact.objects.filter(job=job).values_list("kind", flat=True))
+            self.assertIn(ArtifactKind.CHUNKS_JSON, kinds)
+            self.assertIn(ArtifactKind.FIGURES_ZIP, kinds)
+
+            chunks = Artifact.objects.get(job=job, kind=ArtifactKind.CHUNKS_JSON)
+            chunks_path = os.path.join(tmpdir, chunks.storage_relpath)
+            with open(chunks_path, "rb") as handle:
+                payload = json.loads(handle.read().decode("utf-8"))
+            self.assertEqual(payload.get("format"), "doctags")
+            self.assertIn("content", payload)
+
+            figures = Artifact.objects.get(job=job, kind=ArtifactKind.FIGURES_ZIP)
+            figures_path = os.path.join(tmpdir, figures.storage_relpath)
+            with zipfile.ZipFile(figures_path, "r") as archive:
+                names = archive.namelist()
+            self.assertEqual(len(names), 1)
 
 
 class TestCleanupTasks(TestCase):

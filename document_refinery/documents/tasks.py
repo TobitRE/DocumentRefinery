@@ -1,10 +1,15 @@
+import base64
+import binascii
 import hashlib
 import hmac
+import io
 import json
+import mimetypes
 import os
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -134,6 +139,39 @@ def _write_artifact(job: IngestionJob, kind: str, relpath: str, data: bytes, con
         size_bytes=size_bytes,
         content_type=content_type,
     )
+
+
+def _decode_data_uri(uri: str) -> tuple[bytes, str] | None:
+    uri = str(uri)
+    if not uri.startswith("data:"):
+        return None
+    if "," not in uri:
+        return None
+    header, payload = uri.split(",", 1)
+    if ";base64" not in header:
+        return None
+    mime = header[5:].split(";", 1)[0]
+    try:
+        raw = base64.b64decode(payload)
+    except (ValueError, binascii.Error):
+        return None
+    extension = mimetypes.guess_extension(mime) or ".bin"
+    return raw, extension
+
+
+def _build_figures_zip(docling_doc: DoclingDocument) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for idx, picture in enumerate(docling_doc.pictures or [], start=1):
+            image_ref = getattr(picture, "image", None)
+            if not image_ref or not image_ref.uri:
+                continue
+            decoded = _decode_data_uri(str(image_ref.uri))
+            if not decoded:
+                continue
+            payload, extension = decoded
+            archive.writestr(f"figure_{idx}{extension}", payload)
+    return buffer.getvalue()
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -343,6 +381,29 @@ def export_artifacts_task(self, job_id: int) -> int:
             _artifact_relpath(job, "document.doctags"),
             doctags.encode("utf-8"),
             "text/plain",
+        )
+    if "chunks_json" in exports:
+        doctags = docling_doc.export_to_document_tokens()
+        payload = json.dumps(
+            {"format": "doctags", "content": doctags},
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        _write_artifact(
+            job,
+            ArtifactKind.CHUNKS_JSON,
+            _artifact_relpath(job, "chunks.json"),
+            payload,
+            "application/json",
+        )
+    if "figures_zip" in exports:
+        payload = _build_figures_zip(docling_doc)
+        _write_artifact(
+            job,
+            ArtifactKind.FIGURES_ZIP,
+            _artifact_relpath(job, "figures.zip"),
+            payload,
+            "application/zip",
         )
 
     job.export_ms = int((time.monotonic() - start) * 1000)
