@@ -238,9 +238,23 @@ class JobViewSet(
         def parse_iso(value: str):
             if not value:
                 return None
-            value = value.replace(" ", "+")
+            value = value.strip()
             if value.endswith("Z"):
-                value = value.replace("Z", "+00:00")
+                value = value[:-1] + "+00:00"
+            else:
+                if " " in value:
+                    base, tail = value.rsplit(" ", 1)
+                    is_offset = False
+                    if tail.startswith(("+", "-")) and len(tail) in (5, 6):
+                        offset = tail[1:]
+                        is_offset = offset.replace(":", "").isdigit()
+                    elif "T" in base and len(tail) in (4, 5) and tail.replace(":", "").isdigit():
+                        tail = f"+{tail}"
+                        is_offset = True
+                    if is_offset:
+                        if len(tail) == 5:
+                            tail = f"{tail[:3]}:{tail[3:]}"
+                        value = f"{base}{tail}"
             dt = timezone.datetime.fromisoformat(value)
             if timezone.is_naive(dt):
                 dt = timezone.make_aware(dt, timezone.get_current_timezone())
