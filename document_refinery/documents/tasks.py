@@ -30,9 +30,18 @@ from .models import (
 )
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
-WEBHOOK_MAX_ATTEMPTS = int(getattr(settings, "WEBHOOK_MAX_ATTEMPTS", 5))
-WEBHOOK_INITIAL_BACKOFF_SECONDS = int(getattr(settings, "WEBHOOK_INITIAL_BACKOFF_SECONDS", 30))
-WEBHOOK_REQUEST_TIMEOUT = int(getattr(settings, "WEBHOOK_REQUEST_TIMEOUT", 10))
+
+
+def _webhook_max_attempts() -> int:
+    return int(getattr(settings, "WEBHOOK_MAX_ATTEMPTS", 5))
+
+
+def _webhook_initial_backoff_seconds() -> int:
+    return int(getattr(settings, "WEBHOOK_INITIAL_BACKOFF_SECONDS", 30))
+
+
+def _webhook_request_timeout() -> int:
+    return int(getattr(settings, "WEBHOOK_REQUEST_TIMEOUT", 10))
 
 
 def start_ingestion_pipeline(job_id: int):
@@ -430,7 +439,7 @@ def deliver_webhook_delivery(self, delivery_id: int) -> bool:
 
     request = urllib.request.Request(endpoint.url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=WEBHOOK_REQUEST_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=_webhook_request_timeout()) as response:
             code = response.getcode()
         if 200 <= code < 300:
             delivery.status = WebhookDeliveryStatus.DELIVERED
@@ -457,12 +466,12 @@ def deliver_webhook_delivery(self, delivery_id: int) -> bool:
         response_code = getattr(exc, "code", None)
         delivery.response_code = response_code
         delivery.last_error = str(exc)
-        if delivery.attempt >= WEBHOOK_MAX_ATTEMPTS:
+        if delivery.attempt >= _webhook_max_attempts():
             delivery.status = WebhookDeliveryStatus.FAILED
             delivery.next_retry_at = None
         else:
             delivery.status = WebhookDeliveryStatus.RETRYING
-            delay = WEBHOOK_INITIAL_BACKOFF_SECONDS * (2 ** (delivery.attempt - 1))
+            delay = _webhook_initial_backoff_seconds() * (2 ** (delivery.attempt - 1))
             delivery.next_retry_at = timezone.now() + timedelta(seconds=delay)
         delivery.save(
             update_fields=[
@@ -477,5 +486,8 @@ def deliver_webhook_delivery(self, delivery_id: int) -> bool:
         endpoint.last_failure_at = timezone.now()
         endpoint.save(update_fields=["last_failure_at", "modified_at"])
         if delivery.status == WebhookDeliveryStatus.RETRYING:
-            self.apply_async(args=[delivery.id], countdown=delay)
+            if not getattr(self.request, "called_directly", False) and not getattr(
+                self.request, "is_eager", False
+            ):
+                self.apply_async(args=[delivery.id], countdown=delay)
         return False

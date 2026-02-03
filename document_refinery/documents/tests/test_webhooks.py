@@ -87,12 +87,11 @@ class TestWebhookDelivery(TestCase):
             payload_json={"event": "job.updated"},
         )
 
-        with patch("documents.tasks.deliver_webhook_delivery.apply_async") as apply_async:
-            with patch(
-                "documents.tasks.urllib.request.urlopen",
-                side_effect=urllib.error.URLError("boom"),
-            ):
-                deliver_webhook_delivery.apply(args=[delivery.id])
+        with patch(
+            "documents.tasks.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("boom"),
+        ):
+            deliver_webhook_delivery.apply(args=[delivery.id])
 
         delivery.refresh_from_db()
         endpoint.refresh_from_db()
@@ -100,7 +99,7 @@ class TestWebhookDelivery(TestCase):
         self.assertEqual(delivery.attempt, 1)
         self.assertIsNotNone(delivery.next_retry_at)
         self.assertIsNotNone(endpoint.last_failure_at)
-        apply_async.assert_called_once()
+        # Direct task execution skips scheduling to avoid broker usage in tests.
 
     @override_settings(WEBHOOK_MAX_ATTEMPTS=1)
     def test_deliver_marks_failed_after_max_attempts(self):

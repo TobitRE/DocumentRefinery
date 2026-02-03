@@ -235,6 +235,17 @@ class JobViewSet(
         api_key = self.request.auth
         queryset = IngestionJob.objects.filter(tenant=api_key.tenant).order_by("-created_at")
 
+        def parse_iso(value: str):
+            if not value:
+                return None
+            value = value.replace(" ", "+")
+            if value.endswith("Z"):
+                value = value.replace("Z", "+00:00")
+            dt = timezone.datetime.fromisoformat(value)
+            if timezone.is_naive(dt):
+                dt = timezone.make_aware(dt, timezone.get_current_timezone())
+            return dt
+
         external_uuid = self.request.query_params.get("external_uuid")
         if external_uuid:
             try:
@@ -254,27 +265,21 @@ class JobViewSet(
         updated_after = self.request.query_params.get("updated_after")
         if updated_after:
             try:
-                dt = timezone.datetime.fromisoformat(updated_after)
-                if timezone.is_naive(dt):
-                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                dt = parse_iso(updated_after)
                 queryset = queryset.filter(modified_at__gte=dt)
             except ValueError:
                 return IngestionJob.objects.none()
         created_after = self.request.query_params.get("created_after")
         if created_after:
             try:
-                dt = timezone.datetime.fromisoformat(created_after)
-                if timezone.is_naive(dt):
-                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                dt = parse_iso(created_after)
                 queryset = queryset.filter(created_at__gte=dt)
             except ValueError:
                 return IngestionJob.objects.none()
         created_before = self.request.query_params.get("created_before")
         if created_before:
             try:
-                dt = timezone.datetime.fromisoformat(created_before)
-                if timezone.is_naive(dt):
-                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                dt = parse_iso(created_before)
                 queryset = queryset.filter(created_at__lte=dt)
             except ValueError:
                 return IngestionJob.objects.none()
