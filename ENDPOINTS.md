@@ -18,6 +18,13 @@ Auth: `Authorization: Api-Key <token>`
 - `POST /v1/jobs/{id}/cancel/` — cancel a queued/running job (best-effort; attempts to revoke worker task)
 - `POST /v1/jobs/{id}/retry/` — retry a failed/quarantined job
 
+## Webhooks
+- `POST /v1/webhooks/` — create webhook endpoint (`webhooks:write`)
+- `GET /v1/webhooks/` — list webhook endpoints (`webhooks:read`)
+- `GET /v1/webhooks/{id}/` — webhook detail (`webhooks:read`)
+- `PATCH /v1/webhooks/{id}/` — update webhook endpoint (`webhooks:write`)
+- `DELETE /v1/webhooks/{id}/` — delete webhook endpoint (`webhooks:write`)
+
 ## Admin
 - `GET /admin/` — Django admin
 

@@ -1,502 +1,299 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Document Refinery — Ops Dashboard</title>
-    <style>
-      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+{% extends "dashboard/base.html" %}
 
-      :root {
-        --bg: #f7f2eb;
-        --bg-alt: #efe7dd;
-        --ink: #151515;
-        --muted: #6c5f55;
-        --accent: #c85b2a;
-        --accent-2: #2a6fc8;
-        --card: #fff9f2;
-        --shadow: 0 14px 28px rgba(19, 17, 13, 0.08);
-      }
+{% block title %}Document Refinery — Ops Dashboard{% endblock %}
 
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        color: var(--ink);
-        background: radial-gradient(circle at top, #fff6ea 0%, var(--bg) 35%, #efe5d8 100%);
-        font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
-      }
-
-      header {
-        padding: 40px 48px 24px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 16px;
-        align-items: center;
-        justify-content: space-between;
-      }
-
-      .title-block h1 {
-        margin: 0;
-        font-size: clamp(28px, 4vw, 44px);
-        letter-spacing: -0.02em;
-      }
-
-      .title-block p {
-        margin: 6px 0 0;
-        color: var(--muted);
-      }
-
-      .key-panel {
-        display: grid;
-        gap: 8px;
-        min-width: min(420px, 100%);
-      }
-
-      .key-panel label {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: var(--muted);
-      }
-
-      .key-panel input {
-        padding: 12px 14px;
-        border: 1px solid #d8cbbd;
-        border-radius: 12px;
-        background: #fff;
-        font-size: 14px;
-      }
-
-      .key-actions {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-
-      .key-meta {
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      button {
-        border: 0;
-        background: var(--accent);
-        color: white;
-        padding: 10px 16px;
-        border-radius: 999px;
-        font-weight: 600;
-        cursor: pointer;
-        box-shadow: var(--shadow);
-      }
-
-      button.secondary {
-        background: var(--accent-2);
-      }
-
-      main {
-        padding: 0 48px 48px;
-        display: grid;
-        gap: 24px;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 18px;
-      }
-
-      .card {
-        background: var(--card);
-        border: 1px solid #eadfce;
-        border-radius: 20px;
-        padding: 18px 20px;
-        box-shadow: var(--shadow);
-      }
-
-      .card h3 {
-        margin: 0 0 10px;
-        font-size: 16px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      .stat {
-        font-size: 30px;
-        font-weight: 700;
-        font-variant-numeric: tabular-nums;
-      }
-
-      .muted {
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      .mono {
-        font-family: "IBM Plex Mono", "Courier New", monospace;
-      }
-
-      .list {
-        display: grid;
-        gap: 10px;
-      }
-
-      .pill {
-        padding: 8px 12px;
-        border-radius: 999px;
-        background: #fff1df;
-        border: 1px solid #f0d9c1;
-        font-size: 13px;
-      }
-
-      .metrics {
-        margin: 0;
-        padding: 12px;
-        border-radius: 12px;
-        background: #fbf4ea;
-        border: 1px dashed #eadfce;
-        font-family: "IBM Plex Mono", "Courier New", monospace;
-        font-size: 12px;
-        line-height: 1.5;
-        white-space: pre-wrap;
-      }
-
-      .status {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        background: #ffe7d4;
-      }
-
-      .error {
-        color: #9b2c1a;
-        font-size: 13px;
-      }
-
-      .footer {
-        padding: 12px 48px 40px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      @media (max-width: 720px) {
-        header {
-          padding: 28px 24px 16px;
-        }
-
-        main {
-          padding: 0 24px 40px;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <header>
-      <div class="title-block">
-        <h1>Document Refinery</h1>
-        <p>Staff dashboard — API key scopes workload data.</p>
-      </div>
-      <div class="key-panel card">
-        <label for="apiKeyInput">API key</label>
+{% block header_extra %}
+  <div class="card" style="padding: 16px 18px;">
+    <div class="row" style="justify-content: space-between;">
+      <div style="min-width: min(420px, 100%); display: grid; gap: 8px;">
+        <label for="apiKeyInput" class="muted" style="text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px;">API key</label>
         <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
-        <div class="key-actions">
+        <div class="actions">
           <button id="saveKeyBtn">Save key</button>
           <button class="secondary" id="refreshBtn">Refresh data</button>
         </div>
-        <div class="key-meta">
-          <label class="pill">
+        <div class="row muted" style="gap: 10px;">
+          <label class="pill" style="cursor: pointer;">
             <input type="checkbox" id="autoRefresh" />
             Auto-refresh (10s)
           </label>
           <span>Last update: <span id="lastUpdated">—</span></span>
-          <a class="pill" href="/admin/" target="_blank" rel="noopener">Open admin</a>
         </div>
         <div class="muted" id="statusLine">Waiting for API key.</div>
       </div>
-    </header>
-
-    <main>
-      <section class="grid">
-        <div class="card">
-          <h3>Queued</h3>
-          <div class="stat" id="statQueued">—</div>
-        </div>
-        <div class="card">
-          <h3>Running</h3>
-          <div class="stat" id="statRunning">—</div>
-        </div>
-        <div class="card">
-          <h3>Succeeded</h3>
-          <div class="stat" id="statSucceeded">—</div>
-        </div>
-        <div class="card">
-          <h3>Failed</h3>
-          <div class="stat" id="statFailed">—</div>
-        </div>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h3>Durations (24h)</h3>
-          <div class="list">
-            <div class="mono">Avg: <span id="statAvg">—</span> ms</div>
-            <div class="mono">P50: <span id="statP50">—</span> ms</div>
-            <div class="mono">P95: <span id="statP95">—</span> ms</div>
-            <div class="mono">Total: <span id="statTotal">—</span> ms</div>
-          </div>
-        </div>
-        <div class="card">
-          <h3>Stages running</h3>
-          <div class="list" id="stagesRunning">No active stages.</div>
-        </div>
-        <div class="card">
-          <h3>Workers</h3>
-          <div class="list" id="workerList">—</div>
-        </div>
-        <div class="card">
-          <h3>System status</h3>
-          <div class="list" id="systemStatus">—</div>
-        </div>
-        <div class="card">
-          <h3>Metrics (internal)</h3>
-          <pre class="metrics" id="metricsText">—</pre>
-        </div>
-      </section>
-
-      <section class="card">
-        <h3>Recent failures</h3>
-        <div class="list" id="recentFailures">—</div>
-      </section>
-    </main>
-
-    <div class="footer">
-      Staff-only page. Use an API key to scope data. Cancellation attempts to revoke Celery
-      tasks but may not stop already-running work.
     </div>
+  </div>
+{% endblock %}
 
-    <script>
-      const statusLine = document.getElementById("statusLine");
-      const apiKeyInput = document.getElementById("apiKeyInput");
-      const saveKeyBtn = document.getElementById("saveKeyBtn");
-      const refreshBtn = document.getElementById("refreshBtn");
-      const autoRefresh = document.getElementById("autoRefresh");
-      const lastUpdated = document.getElementById("lastUpdated");
+{% block content %}
+  <section class="grid">
+    <div class="card">
+      <h3>Queued</h3>
+      <div class="stat" id="statQueued">—</div>
+    </div>
+    <div class="card">
+      <h3>Running</h3>
+      <div class="stat" id="statRunning">—</div>
+    </div>
+    <div class="card">
+      <h3>Succeeded</h3>
+      <div class="stat" id="statSucceeded">—</div>
+    </div>
+    <div class="card">
+      <h3>Failed</h3>
+      <div class="stat" id="statFailed">—</div>
+    </div>
+  </section>
 
-      const fields = {
-        queued: document.getElementById("statQueued"),
-        running: document.getElementById("statRunning"),
-        succeeded: document.getElementById("statSucceeded"),
-        failed: document.getElementById("statFailed"),
-        avg: document.getElementById("statAvg"),
-        p50: document.getElementById("statP50"),
-        p95: document.getElementById("statP95"),
-        total: document.getElementById("statTotal"),
-        stages: document.getElementById("stagesRunning"),
-        workers: document.getElementById("workerList"),
-        system: document.getElementById("systemStatus"),
-        failures: document.getElementById("recentFailures"),
-        metrics: document.getElementById("metricsText"),
-      };
+  <section class="grid">
+    <div class="card">
+      <h3>Durations (24h)</h3>
+      <div class="list">
+        <div class="mono">Avg: <span id="statAvg">—</span> ms</div>
+        <div class="mono">P50: <span id="statP50">—</span> ms</div>
+        <div class="mono">P95: <span id="statP95">—</span> ms</div>
+        <div class="mono">Total: <span id="statTotal">—</span> ms</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Stages running</h3>
+      <div class="list" id="stagesRunning">No active stages.</div>
+    </div>
+    <div class="card">
+      <h3>Workers</h3>
+      <div class="list" id="workerList">—</div>
+    </div>
+    <div class="card">
+      <h3>System status</h3>
+      <div class="list" id="systemStatus">—</div>
+    </div>
+    <div class="card">
+      <h3>Metrics (internal)</h3>
+      <pre class="metrics" id="metricsText">—</pre>
+    </div>
+  </section>
 
-      function setStatus(message, isError = false) {
-        statusLine.textContent = message;
-        statusLine.className = isError ? "error" : "muted";
+  <section class="card">
+    <h3>Recent failures</h3>
+    <div class="list" id="recentFailures">—</div>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const statusLine = document.getElementById("statusLine");
+    const apiKeyInput = document.getElementById("apiKeyInput");
+    const saveKeyBtn = document.getElementById("saveKeyBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const autoRefresh = document.getElementById("autoRefresh");
+    const lastUpdated = document.getElementById("lastUpdated");
+
+    const fields = {
+      queued: document.getElementById("statQueued"),
+      running: document.getElementById("statRunning"),
+      succeeded: document.getElementById("statSucceeded"),
+      failed: document.getElementById("statFailed"),
+      avg: document.getElementById("statAvg"),
+      p50: document.getElementById("statP50"),
+      p95: document.getElementById("statP95"),
+      total: document.getElementById("statTotal"),
+      stages: document.getElementById("stagesRunning"),
+      workers: document.getElementById("workerList"),
+      system: document.getElementById("systemStatus"),
+      failures: document.getElementById("recentFailures"),
+      metrics: document.getElementById("metricsText"),
+    };
+
+    function setStatus(message, isError = false) {
+      statusLine.textContent = message;
+      statusLine.className = isError ? "error" : "muted";
+    }
+
+    function loadSavedKey() {
+      const saved = localStorage.getItem("docrefinery_api_key");
+      if (saved) {
+        apiKeyInput.value = saved;
       }
+    }
 
-      function loadSavedKey() {
-        const saved = localStorage.getItem("docrefinery_api_key");
-        if (saved) {
-          apiKeyInput.value = saved;
-        }
+    function saveKey() {
+      localStorage.setItem("docrefinery_api_key", apiKeyInput.value.trim());
+      setStatus("API key saved.");
+    }
+
+    async function fetchJson(path) {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Add an API key to load data.", true);
+        throw new Error("missing key");
       }
-
-      function saveKey() {
-        localStorage.setItem("docrefinery_api_key", apiKeyInput.value.trim());
-        setStatus("API key saved.");
-      }
-
-      async function fetchJson(path) {
-        const key = apiKeyInput.value.trim();
-        if (!key) {
-          setStatus("Add an API key to load data.", true);
-          throw new Error("missing key");
-        }
-        const res = await fetch(path, {
-          headers: {
-            Authorization: `Api-Key ${key}`,
-          },
-        });
-        if (!res.ok) {
-          const msg = `Request failed (${res.status})`;
-          setStatus(msg, true);
-          throw new Error(msg);
-        }
-        return res.json();
-      }
-
-      function renderSummary(data) {
-        fields.queued.textContent = data.jobs.queued ?? 0;
-        fields.running.textContent = data.jobs.running ?? 0;
-        fields.succeeded.textContent = data.jobs.succeeded ?? 0;
-        fields.failed.textContent = data.jobs.failed ?? 0;
-        fields.avg.textContent = data.durations_ms.avg_24h ?? "—";
-        fields.p50.textContent = data.durations_ms.p50_24h ?? "—";
-        fields.p95.textContent = data.durations_ms.p95_24h ?? "—";
-        fields.total.textContent = data.durations_ms.total_24h ?? "—";
-
-        const stages = data.stages_running || {};
-        const stageEntries = Object.entries(stages);
-        fields.stages.innerHTML = stageEntries.length
-          ? stageEntries
-              .map(
-                ([name, count]) =>
-                  `<div class="pill">${name.toLowerCase()}: ${count}</div>`
-              )
-              .join("")
-          : "No active stages.";
-
-        const failures = data.recent_failures || [];
-        fields.failures.innerHTML = failures.length
-          ? failures
-              .map(
-                (item) =>
-                  `<div class="pill">Job ${item.id} · ${item.error_code || "UNKNOWN"}</div>`
-              )
-              .join("")
-          : "No recent failures.";
-      }
-
-      function renderWorkers(data) {
-        const workers = data.workers || [];
-        fields.workers.innerHTML = workers.length
-          ? workers
-              .map(
-                (worker) =>
-                  `<div class="pill">${worker.hostname} · ${worker.active_tasks} active</div>`
-              )
-              .join("")
-          : "No workers online.";
-      }
-
-      function formatBytes(bytes) {
-        if (bytes === null || bytes === undefined) return "—";
-        const units = ["B", "KB", "MB", "GB", "TB"];
-        let idx = 0;
-        let value = bytes;
-        while (value >= 1024 && idx < units.length - 1) {
-          value /= 1024;
-          idx += 1;
-        }
-        return `${value.toFixed(1)} ${units[idx]}`;
-      }
-
-      function formatPercent(value) {
-        if (value === null || value === undefined) return "—";
-        return `${value.toFixed(1)}%`;
-      }
-
-      function formatUptime(seconds) {
-        if (!seconds && seconds !== 0) return "—";
-        const days = Math.floor(seconds / 86400);
-        const hours = Math.floor((seconds % 86400) / 3600);
-        const mins = Math.floor((seconds % 3600) / 60);
-        if (days > 0) return `${days}d ${hours}h`;
-        if (hours > 0) return `${hours}h ${mins}m`;
-        return `${mins}m`;
-      }
-
-      function renderSystem(data) {
-        const cpu = data.cpu || {};
-        const mem = data.memory || {};
-        const disk = data.disk || {};
-        const gpu = data.gpu || {};
-        const load = cpu.loadavg ? cpu.loadavg.map((v) => v.toFixed(2)).join(", ") : "—";
-        const gpuLine = gpu.available
-          ? `gpu: ${gpu.gpus
-              .map(
-                (item) =>
-                  `${item.name} · ${item.utilization_pct}% · ${item.memory_used_mb}/${item.memory_total_mb} MB`
-              )
-              .join(" | ")}`
-          : `gpu: ${gpu.reason || "unavailable"}`;
-        const driverLine = gpu.driver_version ? `driver: ${gpu.driver_version}` : null;
-
-        fields.system.innerHTML = `
-          <div class="pill">db: ${data.checks?.db ? "ok" : "down"}</div>
-          <div class="pill">broker: ${data.checks?.broker ? "ok" : "down"}</div>
-          <div class="pill">cpu: ${cpu.count ?? "—"} cores · load ${load}</div>
-          <div class="pill">mem: ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${formatPercent(
-          mem.percent
-        )})</div>
-          <div class="pill">disk(/): ${formatBytes(
-            disk.root?.used
-          )} / ${formatBytes(disk.root?.total)} (${formatPercent(
-          disk.root?.percent
-        )})</div>
-          <div class="pill">disk(data): ${
-            disk.data_root
-              ? `${formatBytes(disk.data_root.used)} / ${formatBytes(
-                  disk.data_root.total
-                )} (${formatPercent(disk.data_root.percent)})`
-              : "n/a"
-          }</div>
-          <div class="pill">uptime: ${formatUptime(data.uptime_seconds)}</div>
-          <div class="pill">${gpuLine}</div>
-          ${driverLine ? `<div class="pill">${driverLine}</div>` : ""}
-        `;
-        fields.metrics.textContent = data.metrics?.text || "—";
-      }
-
-      async function refresh() {
-        setStatus("Loading...");
-        try {
-          const [summary, workers, system] = await Promise.all([
-            fetchJson("/v1/dashboard/summary"),
-            fetchJson("/v1/dashboard/workers"),
-            fetch("/dashboard/system").then((res) => res.json()),
-          ]);
-          renderSummary(summary);
-          renderWorkers(workers);
-          renderSystem(system);
-          setStatus("Updated just now.");
-          lastUpdated.textContent = new Date().toLocaleTimeString();
-        } catch (err) {
-          if (!apiKeyInput.value.trim()) {
-            return;
-          }
-          setStatus("Failed to load data.", true);
-        }
-      }
-
-      saveKeyBtn.addEventListener("click", () => {
-        saveKey();
-        refresh();
+      const res = await fetch(path, {
+        headers: {
+          Authorization: `Api-Key ${key}`,
+        },
       });
-      refreshBtn.addEventListener("click", refresh);
-      autoRefresh.addEventListener("change", () => {
-        if (autoRefresh.checked) {
-          setStatus("Auto-refresh enabled.");
-        }
-      });
+      if (!res.ok) {
+        const msg = `Request failed (${res.status})`;
+        setStatus(msg, true);
+        throw new Error(msg);
+      }
+      return res.json();
+    }
 
-      loadSavedKey();
-      if (apiKeyInput.value.trim()) {
+    function renderSummary(data) {
+      fields.queued.textContent = data.jobs.queued ?? 0;
+      fields.running.textContent = data.jobs.running ?? 0;
+      fields.succeeded.textContent = data.jobs.succeeded ?? 0;
+      fields.failed.textContent = data.jobs.failed ?? 0;
+      fields.avg.textContent = data.durations_ms.avg_24h ?? "—";
+      fields.p50.textContent = data.durations_ms.p50_24h ?? "—";
+      fields.p95.textContent = data.durations_ms.p95_24h ?? "—";
+      fields.total.textContent = data.durations_ms.total_24h ?? "—";
+
+      const stages = data.stages_running || {};
+      const stageEntries = Object.entries(stages);
+      fields.stages.innerHTML = stageEntries.length
+        ? stageEntries
+            .map(
+              ([name, count]) =>
+                `<div class="pill">${name.toLowerCase()}: ${count}</div>`
+            )
+            .join("")
+        : "No active stages.";
+
+      const failures = data.recent_failures || [];
+      fields.failures.innerHTML = failures.length
+        ? failures
+            .map(
+              (item) =>
+                `<div class="pill">Job ${item.id} · ${item.error_code || "UNKNOWN"}</div>`
+            )
+            .join("")
+        : "No recent failures.";
+    }
+
+    function renderWorkers(data) {
+      const workers = data.workers || [];
+      fields.workers.innerHTML = workers.length
+        ? workers
+            .map(
+              (worker) =>
+                `<div class="pill">${worker.hostname} · ${worker.active_tasks} active</div>`
+            )
+            .join("")
+        : "No workers online.";
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === null || bytes === undefined) return "—";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let idx = 0;
+      let value = bytes;
+      while (value >= 1024 && idx < units.length - 1) {
+        value /= 1024;
+        idx += 1;
+      }
+      return `${value.toFixed(1)} ${units[idx]}`;
+    }
+
+    function formatPercent(value) {
+      if (value === null || value === undefined) return "—";
+      return `${value.toFixed(1)}%`;
+    }
+
+    function formatUptime(seconds) {
+      if (!seconds && seconds !== 0) return "—";
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      if (days > 0) return `${days}d ${hours}h`;
+      if (hours > 0) return `${hours}h ${mins}m`;
+      return `${mins}m`;
+    }
+
+    function renderSystem(data) {
+      const cpu = data.cpu || {};
+      const mem = data.memory || {};
+      const disk = data.disk || {};
+      const gpu = data.gpu || {};
+      const load = cpu.loadavg ? cpu.loadavg.map((v) => v.toFixed(2)).join(", ") : "—";
+      const gpuLine = gpu.available
+        ? `gpu: ${gpu.gpus
+            .map(
+              (item) =>
+                `${item.name} · ${item.utilization_pct}% · ${item.memory_used_mb}/${item.memory_total_mb} MB`
+            )
+            .join(" | ")}`
+        : `gpu: ${gpu.reason || "unavailable"}`;
+      const driverLine = gpu.driver_version ? `driver: ${gpu.driver_version}` : null;
+
+      fields.system.innerHTML = `
+        <div class="pill">db: ${data.checks?.db ? "ok" : "down"}</div>
+        <div class="pill">broker: ${data.checks?.broker ? "ok" : "down"}</div>
+        <div class="pill">cpu: ${cpu.count ?? "—"} cores · load ${load}</div>
+        <div class="pill">mem: ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${formatPercent(
+        mem.percent
+      )})</div>
+        <div class="pill">disk(/): ${formatBytes(
+          disk.root?.used
+        )} / ${formatBytes(disk.root?.total)} (${formatPercent(
+        disk.root?.percent
+      )})</div>
+        <div class="pill">disk(data): ${
+          disk.data_root
+            ? `${formatBytes(disk.data_root.used)} / ${formatBytes(
+                disk.data_root.total
+              )} (${formatPercent(disk.data_root.percent)})`
+            : "n/a"
+        }</div>
+        <div class="pill">uptime: ${formatUptime(data.uptime_seconds)}</div>
+        <div class="pill">${gpuLine}</div>
+        ${driverLine ? `<div class="pill">${driverLine}</div>` : ""}
+      `;
+      fields.metrics.textContent = data.metrics?.text || "—";
+    }
+
+    async function refresh() {
+      setStatus("Loading...");
+      try {
+        const [summary, workers, system] = await Promise.all([
+          fetchJson("/v1/dashboard/summary"),
+          fetchJson("/v1/dashboard/workers"),
+          fetch("/dashboard/system").then((res) => res.json()),
+        ]);
+        renderSummary(summary);
+        renderWorkers(workers);
+        renderSystem(system);
+        setStatus("Updated just now.");
+        lastUpdated.textContent = new Date().toLocaleTimeString();
+      } catch (err) {
+        if (!apiKeyInput.value.trim()) {
+          return;
+        }
+        setStatus("Failed to load data.", true);
+      }
+    }
+
+    saveKeyBtn.addEventListener("click", () => {
+      saveKey();
+      refresh();
+    });
+    refreshBtn.addEventListener("click", refresh);
+    autoRefresh.addEventListener("change", () => {
+      if (autoRefresh.checked) {
+        setStatus("Auto-refresh enabled.");
+      }
+    });
+
+    loadSavedKey();
+    if (apiKeyInput.value.trim()) {
+      refresh();
+    }
+
+    setInterval(() => {
+      if (autoRefresh.checked) {
         refresh();
       }
-
-      setInterval(() => {
-        if (autoRefresh.checked) {
-          refresh();
-        }
-      }, 10000);
-    </script>
-  </body>
-</html>
+    }, 10000);
+  </script>
+{% endblock %}

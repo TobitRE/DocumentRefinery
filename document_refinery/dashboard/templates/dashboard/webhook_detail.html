@@ -1,0 +1,111 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — Webhook{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div>
+        <h3>{{ endpoint.name }}</h3>
+        <div class="muted">Tenant: {{ endpoint.tenant.name }}</div>
+      </div>
+      <a class="pill" href="/dashboard/webhooks/">Back to webhooks</a>
+    </div>
+  </section>
+
+  {% if errors %}
+    <section class="card">
+      <h3>Errors</h3>
+      <div class="error">{{ errors }}</div>
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>Endpoint details</h3>
+    <div class="grid">
+      <div class="panel">
+        <div class="muted">Status</div>
+        <div>{{ endpoint.enabled|yesno:"Enabled,Disabled" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Last success</div>
+        <div class="mono">{{ endpoint.last_success_at|date:"Y-m-d H:i"|default:"—" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Last failure</div>
+        <div class="mono">{{ endpoint.last_failure_at|date:"Y-m-d H:i"|default:"—" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Events</div>
+        <div class="mono">{{ endpoint.events|join:", " }}</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Update endpoint</h3>
+    <form method="post" class="form-grid">
+      {% csrf_token %}
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" name="name" id="name" value="{{ endpoint.name }}" required />
+      </div>
+      <div class="field">
+        <label for="url">URL</label>
+        <input type="url" name="url" id="url" value="{{ endpoint.url }}" required />
+      </div>
+      <div class="field">
+        <label for="secret">Secret (leave blank to keep existing)</label>
+        <input type="text" name="secret" id="secret" />
+      </div>
+      <div class="field">
+        <label for="events">Events (comma-separated)</label>
+        <input type="text" name="events" id="events" value="{{ endpoint.events|join:", " }}" />
+      </div>
+      <div class="row">
+        <label class="pill">
+          <input type="checkbox" name="enabled" {% if endpoint.enabled %}checked{% endif %} />
+          Enabled
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Save changes</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content: space-between;">
+      <h3>Recent deliveries</h3>
+      <a class="pill" href="/dashboard/webhook-deliveries/?endpoint={{ endpoint.id }}">View all logs</a>
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Event</th>
+          <th>Status</th>
+          <th>Attempt</th>
+          <th>Response</th>
+          <th>Next retry</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for delivery in deliveries %}
+          <tr>
+            <td><a href="/dashboard/webhook-deliveries/{{ delivery.id }}/">{{ delivery.event_type }}</a></td>
+            <td>{{ delivery.status }}</td>
+            <td>{{ delivery.attempt }}</td>
+            <td>{{ delivery.response_code|default:"—" }}</td>
+            <td class="mono">{{ delivery.next_retry_at|date:"Y-m-d H:i"|default:"—" }}</td>
+            <td class="mono">{{ delivery.created_at|date:"Y-m-d H:i" }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="6" class="muted">No deliveries recorded.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

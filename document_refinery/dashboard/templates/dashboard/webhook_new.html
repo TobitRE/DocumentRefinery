@@ -1,0 +1,57 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — New Webhook{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h3>Create webhook endpoint</h3>
+    <div class="muted">Set up delivery targets for job updates.</div>
+  </section>
+
+  {% if errors %}
+    <section class="card">
+      <h3>Errors</h3>
+      <div class="error">{{ errors }}</div>
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <form method="post" class="form-grid">
+      {% csrf_token %}
+      <div class="field">
+        <label for="tenant">Tenant</label>
+        <select name="tenant" id="tenant" required>
+          {% for tenant in tenants %}
+            <option value="{{ tenant.id }}">{{ tenant.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" name="name" id="name" required />
+      </div>
+      <div class="field">
+        <label for="url">URL</label>
+        <input type="url" name="url" id="url" required />
+      </div>
+      <div class="field">
+        <label for="secret">Secret (optional)</label>
+        <input type="text" name="secret" id="secret" />
+      </div>
+      <div class="field">
+        <label for="events">Events (comma-separated)</label>
+        <input type="text" name="events" id="events" value="job.updated" />
+      </div>
+      <div class="row">
+        <label class="pill">
+          <input type="checkbox" name="enabled" checked />
+          Enabled
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Create endpoint</button>
+        <a class="pill" href="/dashboard/webhooks/">Back to webhooks</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

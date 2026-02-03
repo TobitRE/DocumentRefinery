@@ -1,0 +1,50 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — Webhooks{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div>
+        <h3>Webhook endpoints</h3>
+        <div class="muted">Delivery stats across configured endpoints.</div>
+      </div>
+      <a class="pill" href="/dashboard/webhooks/new/">Create endpoint</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Tenant</th>
+          <th>URL</th>
+          <th>Status</th>
+          <th>Deliveries</th>
+          <th>Last success</th>
+          <th>Last failure</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for endpoint in endpoints %}
+          <tr>
+            <td><a href="/dashboard/webhooks/{{ endpoint.id }}/">{{ endpoint.name }}</a></td>
+            <td>{{ endpoint.tenant.name }}</td>
+            <td class="mono">{{ endpoint.url }}</td>
+            <td>{{ endpoint.enabled|yesno:"Enabled,Disabled" }}</td>
+            <td class="mono">
+              {{ endpoint.delivery_total }} total · {{ endpoint.delivery_failed }} failed · {{ endpoint.delivery_retrying }} retrying
+            </td>
+            <td class="mono">{{ endpoint.last_success_at|date:"Y-m-d H:i"|default:"—" }}</td>
+            <td class="mono">{{ endpoint.last_failure_at|date:"Y-m-d H:i"|default:"—" }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="7" class="muted">No webhook endpoints configured.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

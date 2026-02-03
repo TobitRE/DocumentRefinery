@@ -1,0 +1,61 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — Create API Key{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h3>Create API key</h3>
+    <div class="muted">Generate a new API key. The raw key is shown once.</div>
+  </section>
+
+  {% if raw_key %}
+    <section class="card">
+      <h3>New key created</h3>
+      <div class="panel mono">{{ raw_key }}</div>
+      <div class="muted">Copy this key now. It will not be shown again.</div>
+    </section>
+  {% endif %}
+
+  {% if errors %}
+    <section class="card">
+      <h3>Errors</h3>
+      <div class="error">{{ errors }}</div>
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <form method="post" class="form-grid">
+      {% csrf_token %}
+      <div class="field">
+        <label for="tenant">Tenant</label>
+        <select name="tenant" id="tenant" required>
+          {% for tenant in tenants %}
+            <option value="{{ tenant.id }}">{{ tenant.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" name="name" id="name" required />
+      </div>
+      <div class="field">
+        <label for="scopes">Scopes (comma-separated)</label>
+        <input type="text" name="scopes" id="scopes" placeholder="documents:read, documents:write" />
+      </div>
+      <div class="field">
+        <label for="docling_options_json">Docling defaults (JSON, optional)</label>
+        <textarea name="docling_options_json" id="docling_options_json" placeholder='{"max_num_pages": 50}'></textarea>
+      </div>
+      <div class="row">
+        <label class="pill">
+          <input type="checkbox" name="active" checked />
+          Active
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Create key</button>
+        <a class="pill" href="/dashboard/api-keys/">Back to keys</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

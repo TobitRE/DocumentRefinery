@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Document Refinery — Ops Dashboard{% endblock %}</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+      :root {
+        --bg: #f7f2eb;
+        --bg-alt: #efe7dd;
+        --ink: #151515;
+        --muted: #6c5f55;
+        --accent: #c85b2a;
+        --accent-2: #2a6fc8;
+        --card: #fff9f2;
+        --shadow: 0 14px 28px rgba(19, 17, 13, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: radial-gradient(circle at top, #fff6ea 0%, var(--bg) 35%, #efe5d8 100%);
+        font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+      }
+
+      header {
+        padding: 36px 48px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .topbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .title-block h1 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 44px);
+        letter-spacing: -0.02em;
+      }
+
+      .title-block p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .nav a {
+        text-decoration: none;
+        color: var(--ink);
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid #eadfce;
+        background: #fff1df;
+        font-size: 13px;
+      }
+
+      .nav a.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: transparent;
+      }
+
+      main {
+        padding: 0 48px 48px;
+        display: grid;
+        gap: 24px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid #eadfce;
+        border-radius: 20px;
+        padding: 18px 20px;
+        box-shadow: var(--shadow);
+      }
+
+      .card h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .stat {
+        font-size: 30px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .mono {
+        font-family: "IBM Plex Mono", "Courier New", monospace;
+      }
+
+      .pill {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: #fff1df;
+        border: 1px solid #f0d9c1;
+        font-size: 13px;
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .metrics {
+        margin: 0;
+        padding: 12px;
+        border-radius: 12px;
+        background: #fbf4ea;
+        border: 1px dashed #eadfce;
+        font-family: "IBM Plex Mono", "Courier New", monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .status {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #ffe7d4;
+      }
+
+      .error {
+        color: #9b2c1a;
+        font-size: 13px;
+      }
+
+      .footer {
+        padding: 12px 48px 40px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .table th,
+      .table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #eadfce;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .table th {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .table a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .field label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+      }
+
+      .field input,
+      .field textarea,
+      .field select {
+        padding: 12px 14px;
+        border: 1px solid #d8cbbd;
+        border-radius: 12px;
+        background: #fff;
+        font-size: 14px;
+        font-family: inherit;
+      }
+
+      .field textarea {
+        min-height: 120px;
+        resize: vertical;
+        font-family: "IBM Plex Mono", "Courier New", monospace;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      #apiKeyInput {
+        padding: 12px 14px;
+        border: 1px solid #d8cbbd;
+        border-radius: 12px;
+        background: #fff;
+        font-size: 14px;
+        font-family: inherit;
+      }
+
+      button {
+        border: 0;
+        background: var(--accent);
+        color: white;
+        padding: 10px 16px;
+        border-radius: 999px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: var(--shadow);
+      }
+
+      button.secondary {
+        background: var(--accent-2);
+      }
+
+      button.ghost {
+        background: transparent;
+        color: var(--accent-2);
+        border: 1px solid var(--accent-2);
+        box-shadow: none;
+      }
+
+      .panel {
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: #fff6ea;
+        border: 1px dashed #eadfce;
+        font-size: 13px;
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      @media (max-width: 720px) {
+        header {
+          padding: 24px 24px 12px;
+        }
+
+        main {
+          padding: 0 24px 40px;
+        }
+
+        .table {
+          font-size: 13px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="topbar">
+        <div class="title-block">
+          <h1>Document Refinery</h1>
+          <p>Staff dashboard — operational overview and controls.</p>
+        </div>
+        <nav class="nav">
+          <a href="/dashboard/" class="{% if nav_active == 'overview' %}active{% endif %}">Overview</a>
+          <a href="/dashboard/api-keys/" class="{% if nav_active == 'keys' %}active{% endif %}">API keys</a>
+          <a href="/dashboard/webhooks/" class="{% if nav_active == 'webhooks' %}active{% endif %}">Webhooks</a>
+          <a href="/dashboard/webhook-deliveries/" class="{% if nav_active == 'deliveries' %}active{% endif %}">Webhook logs</a>
+          <a href="/admin/" target="_blank" rel="noopener">Admin</a>
+        </nav>
+      </div>
+      {% block header_extra %}{% endblock %}
+    </header>
+
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+
+    <div class="footer">
+      Staff-only page. Use the admin for deep data inspection. All actions are audited
+      by Django logs.
+    </div>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

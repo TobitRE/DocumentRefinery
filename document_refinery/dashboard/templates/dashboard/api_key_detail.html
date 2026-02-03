@@ -1,0 +1,82 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — API Key{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div>
+        <h3>{{ key.name }}</h3>
+        <div class="muted">Tenant: {{ key.tenant.name }} · Prefix: <span class="mono">{{ key.prefix }}</span></div>
+      </div>
+      <a class="pill" href="/dashboard/api-keys/">Back to keys</a>
+    </div>
+  </section>
+
+  {% if raw_key %}
+    <section class="card">
+      <h3>Rotated key</h3>
+      <div class="panel mono">{{ raw_key }}</div>
+      <div class="muted">Copy this key now. It will not be shown again.</div>
+    </section>
+  {% endif %}
+
+  {% if errors %}
+    <section class="card">
+      <h3>Errors</h3>
+      <div class="error">{{ errors }}</div>
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>Details</h3>
+    <div class="grid">
+      <div class="panel">
+        <div class="muted">Status</div>
+        <div>{{ key.active|yesno:"Active,Inactive" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Created</div>
+        <div class="mono">{{ key.created_at|date:"Y-m-d H:i" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Last used</div>
+        <div class="mono">{{ key.last_used_at|date:"Y-m-d H:i"|default:"—" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Key hash</div>
+        <div class="mono">{{ key.key_hash }}</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Update</h3>
+    <form method="post" class="form-grid">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="update" />
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" name="name" id="name" value="{{ key.name }}" required />
+      </div>
+      <div class="field">
+        <label for="scopes">Scopes (comma-separated)</label>
+        <input type="text" name="scopes" id="scopes" value="{{ key.scopes|join:", " }}" />
+      </div>
+      <div class="field">
+        <label for="docling_options_json">Docling defaults (JSON, optional)</label>
+        <textarea name="docling_options_json" id="docling_options_json">{{ docling_options_text }}</textarea>
+      </div>
+      <div class="row">
+        <label class="pill">
+          <input type="checkbox" name="active" {% if key.active %}checked{% endif %} />
+          Active
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Save changes</button>
+        <button type="submit" name="action" value="rotate" class="secondary">Rotate key</button>
+      </div>
+    </form>
+  </section>
+{% endblock %}

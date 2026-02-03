@@ -1,0 +1,57 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — Webhook Delivery{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div>
+        <h3>Delivery {{ delivery.id }}</h3>
+        <div class="muted">Endpoint: <a href="/dashboard/webhooks/{{ delivery.endpoint.id }}/">{{ delivery.endpoint.name }}</a></div>
+      </div>
+      <a class="pill" href="/dashboard/webhook-deliveries/">Back to logs</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Overview</h3>
+    <div class="grid">
+      <div class="panel">
+        <div class="muted">Status</div>
+        <div>{{ delivery.status }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Event</div>
+        <div class="mono">{{ delivery.event_type }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Attempt</div>
+        <div>{{ delivery.attempt }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Response code</div>
+        <div>{{ delivery.response_code|default:"—" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Next retry</div>
+        <div class="mono">{{ delivery.next_retry_at|date:"Y-m-d H:i"|default:"—" }}</div>
+      </div>
+      <div class="panel">
+        <div class="muted">Created</div>
+        <div class="mono">{{ delivery.created_at|date:"Y-m-d H:i" }}</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Payload</h3>
+    <pre class="metrics">{{ payload }}</pre>
+  </section>
+
+  {% if delivery.last_error %}
+    <section class="card">
+      <h3>Last error</h3>
+      <pre class="metrics">{{ delivery.last_error }}</pre>
+    </section>
+  {% endif %}
+{% endblock %}
