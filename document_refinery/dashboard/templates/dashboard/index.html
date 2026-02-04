@@ -128,6 +128,40 @@
         <div class="panel" id="artifactPanel">No artifacts.</div>
       </div>
     </div>
+
+    <div class="card">
+      <h3>Compare profiles</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="compareDocumentId">Document ID</label>
+          <input type="text" id="compareDocumentId" placeholder="Document id to compare" />
+        </div>
+        <div class="field">
+          <label>Profiles</label>
+          <div class="list">
+            <label class="pill"><input type="checkbox" name="compareProfiles" value="fast_text" /> fast_text</label>
+            <label class="pill"><input type="checkbox" name="compareProfiles" value="ocr_only" /> ocr_only</label>
+            <label class="pill"><input type="checkbox" name="compareProfiles" value="structured" /> structured</label>
+            <label class="pill"><input type="checkbox" name="compareProfiles" value="full_vlm" /> full_vlm</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="compareOptionsJson">Options JSON (optional)</label>
+          <textarea id="compareOptionsJson" placeholder='{"max_num_pages": 50}'></textarea>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="compareRunBtn">Run comparison</button>
+        </div>
+        <div class="field">
+          <label for="compareIdInput">Comparison ID</label>
+          <input type="text" id="compareIdInput" placeholder="Paste comparison id to fetch jobs" />
+        </div>
+        <div class="actions">
+          <button class="ghost" id="compareFetchBtn" type="button">Fetch jobs</button>
+        </div>
+        <div class="panel" id="compareResult">No comparison yet.</div>
+      </div>
+    </div>
   </section>
 
   <section class="card">
@@ -157,6 +191,12 @@
     const togglePollBtn = document.getElementById("togglePollBtn");
     const jobStatusPanel = document.getElementById("jobStatusPanel");
     const artifactPanel = document.getElementById("artifactPanel");
+    const compareDocumentId = document.getElementById("compareDocumentId");
+    const compareOptionsJson = document.getElementById("compareOptionsJson");
+    const compareRunBtn = document.getElementById("compareRunBtn");
+    const compareIdInput = document.getElementById("compareIdInput");
+    const compareFetchBtn = document.getElementById("compareFetchBtn");
+    const compareResult = document.getElementById("compareResult");
     let pollTimer = null;
 
     const fields = {
@@ -349,12 +389,103 @@
           <div class="pill">Stage: ${stage}</div>
           <div class="pill">External UUID: ${job.external_uuid || "—"}</div>
           <div class="pill">Profile: ${job.profile || "—"}</div>
+          <div class="pill">Comparison: ${job.comparison_id || "—"}</div>
           <div class="pill">Queued: ${job.queued_at || "—"}</div>
           <div class="pill">Started: ${job.started_at || "—"}</div>
           <div class="pill">Finished: ${job.finished_at || "—"}</div>
           <div class="pill">Error: ${error}</div>
         </div>
       `;
+    }
+
+    function selectedCompareProfiles() {
+      return Array.from(document.querySelectorAll("input[name='compareProfiles']:checked")).map(
+        (item) => item.value
+      );
+    }
+
+    function renderComparisonJobs(jobs) {
+      if (!jobs || !jobs.length) {
+        compareResult.textContent = "No comparison jobs found.";
+        return;
+      }
+      compareResult.innerHTML = jobs
+        .map(
+          (job) => `
+            <div class="row" style="justify-content: space-between;">
+              <div class="mono">Job ${job.id} · ${job.profile || "—"} · ${job.status || "—"}</div>
+              <button class="secondary" data-job-id="${job.id}">Load</button>
+            </div>
+          `
+        )
+        .join("");
+      compareResult.querySelectorAll("button[data-job-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          jobIdInput.value = btn.dataset.jobId;
+          fetchJob(btn.dataset.jobId);
+        });
+      });
+    }
+
+    async function fetchComparison(comparisonId) {
+      if (!comparisonId) {
+        setStatus("Provide a comparison id.", true);
+        return;
+      }
+      try {
+        const jobs = await fetchJson(`/v1/jobs/?comparison_id=${comparisonId}`);
+        renderComparisonJobs(jobs);
+      } catch (err) {
+        compareResult.textContent = "Failed to load comparison jobs.";
+      }
+    }
+
+    async function runComparison() {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Select an API key before comparing.", true);
+        return;
+      }
+      const documentId = compareDocumentId.value.trim();
+      if (!documentId) {
+        setStatus("Provide a document id to compare.", true);
+        return;
+      }
+      const profiles = selectedCompareProfiles();
+      if (!profiles.length) {
+        setStatus("Select at least one profile.", true);
+        return;
+      }
+      const payload = { profiles };
+      const optionsRaw = compareOptionsJson.value.trim();
+      if (optionsRaw) {
+        try {
+          payload.options_json = JSON.parse(optionsRaw);
+        } catch (err) {
+          setStatus("Options JSON is invalid.", true);
+          return;
+        }
+      }
+      compareResult.textContent = "Starting comparison...";
+      try {
+        const res = await fetchAuthorized(`/v1/documents/${documentId}/compare/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          setStatus(`Comparison failed (${res.status})`, true);
+          compareResult.textContent = "Comparison failed.";
+          return;
+        }
+        const data = await res.json();
+        compareIdInput.value = data.comparison_id || "";
+        setStatus("Comparison jobs queued.");
+        await fetchComparison(data.comparison_id);
+      } catch (err) {
+        setStatus("Comparison failed.", true);
+        compareResult.textContent = "Comparison failed.";
+      }
     }
 
     function renderArtifacts(items) {
@@ -546,6 +677,14 @@
     togglePollBtn.addEventListener("click", (event) => {
       event.preventDefault();
       togglePolling();
+    });
+    compareRunBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      runComparison();
+    });
+    compareFetchBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      fetchComparison(compareIdInput.value.trim());
     });
     autoRefresh.addEventListener("change", () => {
       if (autoRefresh.checked) {
