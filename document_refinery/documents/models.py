@@ -219,6 +219,11 @@ class WebhookEndpoint(BaseModel):
             models.Index(fields=["tenant", "enabled"]),
         ]
 
+    def clean(self):
+        from .validators import validate_webhook_url
+
+        validate_webhook_url(self.url)
+
     def __str__(self) -> str:
         return f"{self.name} ({self.tenant_id})"
 

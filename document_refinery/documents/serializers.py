@@ -1,7 +1,9 @@
 from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .models import Artifact, Document, IngestionJob, WebhookEndpoint
 from .profiles import PROFILE_NAMES
+from .validators import validate_webhook_url
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -102,4 +104,11 @@ class WebhookEndpointSerializer(serializers.ModelSerializer):
             return value
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise serializers.ValidationError("events must be a list of strings.")
+        return value
+
+    def validate_url(self, value):
+        try:
+            validate_webhook_url(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
         return value

@@ -12,9 +12,9 @@ from documents.models import IngestionJob, IngestionJobStatus
 def _require_internal_token(request):
     token = getattr(settings, "INTERNAL_ENDPOINTS_TOKEN", "")
     if not token:
-        return None
-    provided = request.headers.get("X-Internal-Token") or request.GET.get("token")
-    if provided != token:
+        return JsonResponse({"status": "forbidden"}, status=403)
+    provided = request.headers.get("X-Internal-Token")
+    if not provided or provided != token:
         return JsonResponse({"status": "forbidden"}, status=403)
     return None
 

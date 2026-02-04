@@ -26,6 +26,7 @@ from documents.models import (
     WebhookDeliveryStatus,
     WebhookEndpoint,
 )
+from documents.validators import validate_webhook_url
 
 @method_decorator(staff_member_required, name="dispatch")
 class DashboardPageView(TemplateView):
@@ -401,6 +402,7 @@ def webhook_new(request):
             errors = "Tenant, name, and URL are required."
         else:
             try:
+                validate_webhook_url(url)
                 tenant = Tenant.objects.get(pk=tenant_id)
                 created_by_key = (
                     APIKey.objects.filter(tenant=tenant, active=True)
@@ -422,6 +424,8 @@ def webhook_new(request):
                     return redirect("/dashboard/webhooks/")
             except Tenant.DoesNotExist:
                 errors = "Selected tenant does not exist."
+            except ValidationError as exc:
+                errors = "; ".join(getattr(exc, "messages", None) or [str(exc)])
 
     return render(
         request,
@@ -445,13 +449,17 @@ def webhook_detail(request, pk: int):
         if not name or not url:
             errors = "Name and URL are required."
         else:
-            endpoint.name = name
-            endpoint.url = url
-            endpoint.events = events
-            endpoint.enabled = enabled
-            if secret:
-                endpoint.secret = secret
-            endpoint.save()
+            try:
+                validate_webhook_url(url)
+                endpoint.name = name
+                endpoint.url = url
+                endpoint.events = events
+                endpoint.enabled = enabled
+                if secret:
+                    endpoint.secret = secret
+                endpoint.save()
+            except ValidationError as exc:
+                errors = "; ".join(getattr(exc, "messages", None) or [str(exc)])
 
     deliveries = (
         WebhookDelivery.objects.filter(endpoint=endpoint)

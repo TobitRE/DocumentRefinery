@@ -142,7 +142,7 @@ Expected configuration values:
 - `CELERY_RESULT_BACKEND` (optional)
 - `ALLOWED_HOSTS`
 - `DATABASE_URL` (optional, defaults to SQLite)
-- `INTERNAL_ENDPOINTS_TOKEN` (optional)
+- `INTERNAL_ENDPOINTS_TOKEN` (required for health/ready/metrics)
 - `CORS_ALLOWED_ORIGINS` (if needed)
 
 ## References

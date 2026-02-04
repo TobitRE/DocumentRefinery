@@ -1,7 +1,7 @@
 import uuid
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from authn.models import APIKey, Tenant
 from documents.models import (
@@ -15,6 +15,7 @@ from documents.models import (
 from documents.tasks import queue_job_webhooks
 
 
+@override_settings(WEBHOOK_ALLOWED_HOSTS=["example.com"])
 class TestWebhookQueue(TestCase):
     def setUp(self):
         self.tenant = Tenant.objects.create(name="Acme", slug="acme")

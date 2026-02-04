@@ -1,10 +1,11 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from authn.models import APIKey, Tenant
 from documents.models import WebhookEndpoint
 
 
+@override_settings(WEBHOOK_ALLOWED_HOSTS=["example.com"])
 class TestWebhookEndpointAPI(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -121,3 +122,13 @@ class TestWebhookEndpointAPI(TestCase):
         response = self.client.get("/v1/webhooks/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
+
+    def test_webhook_rejects_private_host(self):
+        self._auth(self.raw_key)
+        response = self.client.post(
+            "/v1/webhooks/",
+            {"name": "Private", "url": "http://127.0.0.1:8000"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("url", response.data)

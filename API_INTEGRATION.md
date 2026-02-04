@@ -295,13 +295,11 @@ GET /readyz
 GET /metrics
 ```
 
-If `INTERNAL_ENDPOINTS_TOKEN` is set, send it as:
+Send `INTERNAL_ENDPOINTS_TOKEN` as:
 
 ```
 X-Internal-Token: <token>
 ```
-
-or via `?token=...` query parameter.
 
 `/healthz` returns a JSON payload including `docling_version` when available.
 

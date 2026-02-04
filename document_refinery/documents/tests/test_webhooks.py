@@ -14,6 +14,7 @@ from documents.models import (
 from documents.tasks import deliver_webhook_delivery
 
 
+@override_settings(WEBHOOK_ALLOWED_HOSTS=["example.com"])
 class TestWebhookDelivery(TestCase):
     def setUp(self):
         self.tenant = Tenant.objects.create(name="Acme", slug="acme")

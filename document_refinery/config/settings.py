@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
 import environ
@@ -29,10 +30,16 @@ elif (BASE_DIR / ".env").exists():
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-change-me")
+SECRET_KEY = os.environ.get("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DEBUG", "true").lower() == "true"
+DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
+IS_TESTING = "test" in sys.argv or "pytest" in sys.argv[0]
+if not SECRET_KEY:
+    if DEBUG or IS_TESTING:
+        SECRET_KEY = "django-insecure-change-me"
+    else:
+        raise RuntimeError("SECRET_KEY is required when DEBUG is false.")
 
 ALLOWED_HOSTS = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
 
@@ -59,6 +66,11 @@ INTERNAL_ENDPOINTS_TOKEN = os.environ.get("INTERNAL_ENDPOINTS_TOKEN", "")
 WEBHOOK_MAX_ATTEMPTS = int(os.environ.get("WEBHOOK_MAX_ATTEMPTS", "5"))
 WEBHOOK_INITIAL_BACKOFF_SECONDS = int(os.environ.get("WEBHOOK_INITIAL_BACKOFF_SECONDS", "30"))
 WEBHOOK_REQUEST_TIMEOUT = int(os.environ.get("WEBHOOK_REQUEST_TIMEOUT", "10"))
+WEBHOOK_ALLOWED_HOSTS = [
+    h.strip().lower()
+    for h in os.environ.get("WEBHOOK_ALLOWED_HOSTS", "").split(",")
+    if h.strip()
+]
 
 
 # Application definition
@@ -195,3 +207,24 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = os.environ.get("STATIC_ROOT", str(PROJECT_ROOT / "staticfiles"))
+
+# Security settings (configure via environment)
+SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", "false").lower() == "true"
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", "false").lower() == "true"
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = (
+    os.environ.get("SECURE_HSTS_INCLUDE_SUBDOMAINS", "false").lower() == "true"
+)
+SECURE_HSTS_PRELOAD = os.environ.get("SECURE_HSTS_PRELOAD", "false").lower() == "true"
+SECURE_REFERRER_POLICY = os.environ.get("SECURE_REFERRER_POLICY", "same-origin")
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+if os.environ.get("SECURE_PROXY_SSL_HEADER", "false").lower() == "true":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

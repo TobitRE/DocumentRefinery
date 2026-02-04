@@ -38,6 +38,15 @@ from .serializers import (
 )
 
 
+def _looks_like_pdf(uploaded) -> bool:
+    try:
+        header = uploaded.read(5)
+        uploaded.seek(0)
+    except Exception:
+        return False
+    return header == b"%PDF-"
+
+
 class DocumentViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
@@ -74,6 +83,11 @@ class DocumentViewSet(
         if uploaded.content_type not in ("application/pdf", "application/x-pdf"):
             return Response(
                 {"error_code": "UNSUPPORTED_MEDIA_TYPE", "message": "Only PDF files are allowed."},
+                status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            )
+        if not _looks_like_pdf(uploaded):
+            return Response(
+                {"error_code": "INVALID_PDF", "message": "File does not look like a PDF."},
                 status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             )
 

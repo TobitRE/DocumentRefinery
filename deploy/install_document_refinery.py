@@ -497,11 +497,9 @@ except Exception as exc:
                 f"postgresql://{user_enc}:{pass_enc}@{db_host}:{db_port}/{db_name}"
             )
 
-        internal_token = ""
-        if ask_user("Protect /healthz,/readyz,/metrics with a token?", default=True):
-            internal_token = secrets.token_urlsafe(32)
-            print(f"{GREEN}Internal token: {internal_token}{RESET}")
-            print(f"{YELLOW}Send as X-Internal-Token header or ?token=...{RESET}")
+        internal_token = secrets.token_urlsafe(32)
+        print(f"{GREEN}Internal token: {internal_token}{RESET}")
+        print(f"{YELLOW}Send as X-Internal-Token header.{RESET}")
 
         secret_key = get_input("SECRET_KEY (leave blank to auto-generate)", "")
         if not secret_key:
@@ -768,9 +766,13 @@ WantedBy=multi-user.target
 
         print_step("Verification")
         if domain_name:
-            print(f"{GREEN}Try: https://{domain_name}/healthz{RESET}")
+            print(
+                f"{GREEN}Try: curl -H 'X-Internal-Token: <token>' https://{domain_name}/healthz{RESET}"
+            )
         else:
-            print(f"{GREEN}Try: http://<server-ip>/healthz{RESET}")
+            print(
+                f"{GREEN}Try: curl -H 'X-Internal-Token: <token>' http://<server-ip>/healthz{RESET}"
+            )
         print(f"{GREEN}Service status: systemctl status gunicorn.service{RESET}")
 
     print_step("Done")

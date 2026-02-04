@@ -63,6 +63,15 @@ class TestDocumentUpload(TestCase):
             response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 415)
 
+    def test_upload_rejects_spoofed_pdf(self):
+        content = b"not really a pdf"
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
+            self.assertEqual(response.status_code, 415)
+            self.assertEqual(response.data["error_code"], "INVALID_PDF")
+
     def test_upload_streamed_file_too_large(self):
         content = b"x" * (1024 * 1024 + 5)
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(

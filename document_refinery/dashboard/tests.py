@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, patch, mock_open
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -154,6 +154,7 @@ class TestDashboardAPI(TestCase):
         self.assertEqual(payload["total_duration_ms"], 300)
 
 
+@override_settings(WEBHOOK_ALLOWED_HOSTS=["example.com"])
 class TestDashboardWebViews(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(

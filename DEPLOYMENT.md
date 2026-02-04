@@ -40,10 +40,12 @@ Important values:
 - `SECRET_KEY` (unique)
 - `DEBUG=false`
 - `ALLOWED_HOSTS=your.domain`
+- `INTERNAL_ENDPOINTS_TOKEN` (required; protects health/ready/metrics)
 - `DATA_ROOT=/var/lib/docling_service`
 - `CELERY_BROKER_URL=redis://localhost:6379/0`
 - `CLAMAV_HOST=127.0.0.1`
 - `X_ACCEL_REDIRECT_LOCATION=/protected`
+- `WEBHOOK_ALLOWED_HOSTS` (optional; allow internal webhook targets)
 
 ## 5) Initialize database
 
@@ -81,13 +83,17 @@ Ensure `X_ACCEL_REDIRECT_LOCATION` matches the Nginx `location /protected/` alia
 ## 8) Verify services
 
 ```bash
-curl http://localhost/healthz
-curl http://localhost/readyz
+curl -H "X-Internal-Token: <token>" http://localhost/healthz
+curl -H "X-Internal-Token: <token>" http://localhost/readyz
 ```
 
 ## 9) TLS (recommended)
 
 Use Certbot or your preferred TLS termination to enable HTTPS.
+
+If you terminate TLS in front of the app, enable security settings in `.env`:
+`SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`,
+and set a non-zero `SECURE_HSTS_SECONDS` once verified.
 
 ## 10) Upgrades
 

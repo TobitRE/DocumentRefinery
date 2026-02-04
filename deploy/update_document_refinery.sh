@@ -194,7 +194,7 @@ if [ -n "${INTERNAL_TOKEN:-}" ]; then
   curl -s -H "X-Internal-Token: ${INTERNAL_TOKEN}" http://localhost/healthz >/dev/null || \
     print_warning "Warm-up failed"
 else
-  curl -s http://localhost/healthz >/dev/null || print_warning "Warm-up failed"
+  print_warning "INTERNAL_ENDPOINTS_TOKEN not set; skipping warm-up"
 fi
 
 print_status "Update completed successfully."
