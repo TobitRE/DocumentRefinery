@@ -28,3 +28,4 @@ As of January 30, 2026.
 ## Ideas for later
 - CI pipeline (tests + lint + type checks).
 - Encrypt webhook secrets at rest (field-level encryption / KMS).
+- Dashboard CSP hardening: move inline JS to static file or add nonce-based CSP.
