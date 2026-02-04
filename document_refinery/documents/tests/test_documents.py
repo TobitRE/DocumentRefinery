@@ -46,7 +46,7 @@ class TestDocumentUpload(TestCase):
             self.assertTrue(os.path.exists(doc.get_quarantine_path()))
 
     def test_upload_rejects_large_file(self):
-        content = b"x" * (1024 * 1024 + 1)
+        content = b"%PDF-1.4\n" + (b"x" * (1024 * 1024))
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(
             DATA_ROOT=tmpdir, UPLOAD_MAX_SIZE_MB=1
         ):
@@ -73,7 +73,7 @@ class TestDocumentUpload(TestCase):
             self.assertEqual(response.data["error_code"], "INVALID_PDF")
 
     def test_upload_streamed_file_too_large(self):
-        content = b"x" * (1024 * 1024 + 5)
+        content = b"%PDF-1.4\n" + (b"x" * (1024 * 1024 + 4))
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(
             DATA_ROOT=tmpdir, UPLOAD_MAX_SIZE_MB=1
         ):
