@@ -77,6 +77,7 @@ class DashboardSummaryView(APIView):
                 "status",
                 "error_code",
                 "error_message",
+                "error_details_json",
                 "stage",
                 "attempt",
                 "max_retries",

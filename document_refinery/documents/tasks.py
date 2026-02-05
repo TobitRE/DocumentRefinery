@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import time
+import traceback
 import urllib.error
 import urllib.request
 import zipfile
@@ -199,6 +200,20 @@ def _mark_failed(job: IngestionJob, code: str, message: str, details: dict | Non
     queue_job_webhooks(job, prev_status, prev_stage)
 
 
+def _traceback_details(limit: int = 20000) -> dict:
+    trace = traceback.format_exc()
+    original_len = len(trace)
+    truncated = False
+    if original_len > limit:
+        trace = trace[-limit:]
+        truncated = True
+    return {
+        "traceback": trace,
+        "traceback_truncated": truncated,
+        "traceback_length": original_len,
+    }
+
+
 def _is_canceled(job: IngestionJob) -> bool:
     return job.status == IngestionJobStatus.CANCELED
 
@@ -321,7 +336,7 @@ def docling_convert_task(self, job_id: int) -> int:
         )
         docling_doc = result.document
     except Exception as exc:
-        _mark_failed(job, "DOCLING_CONVERT_FAILED", str(exc))
+        _mark_failed(job, "DOCLING_CONVERT_FAILED", str(exc), _traceback_details())
         raise
 
     relpath = _artifact_relpath(job, "docling.json")
@@ -359,7 +374,7 @@ def export_artifacts_task(self, job_id: int) -> int:
             data = json.loads(handle.read().decode("utf-8"))
         docling_doc = DoclingDocument.model_validate(data)
     except Exception as exc:
-        _mark_failed(job, "DOCLING_LOAD_FAILED", str(exc))
+        _mark_failed(job, "DOCLING_LOAD_FAILED", str(exc), _traceback_details())
         raise
 
     exports = job.options_json.get("exports") if job.options_json else None

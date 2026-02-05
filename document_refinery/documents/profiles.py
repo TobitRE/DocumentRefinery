@@ -35,8 +35,8 @@ PROFILE_DEFINITIONS: dict[str, dict] = {
         "pipeline_options": {
             "do_ocr": True,
             "do_table_structure": True,
-            "do_picture_description": True,
-            "do_picture_classification": True,
+            "do_picture_description": False,
+            "do_picture_classification": False,
             "generate_picture_images": True,
             "images_scale": 2.0,
         },

@@ -368,6 +368,24 @@
       }
     }
 
+    function getOpenFailureIds() {
+      try {
+        const raw = localStorage.getItem("docrefinery_failure_open");
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(parsed)) return new Set();
+        return new Set(parsed.map((id) => String(id)));
+      } catch (err) {
+        return new Set();
+      }
+    }
+
+    function saveOpenFailureIds(ids) {
+      localStorage.setItem(
+        "docrefinery_failure_open",
+        JSON.stringify(Array.from(ids))
+      );
+    }
+
     function saveKey() {
       localStorage.setItem("docrefinery_api_key", apiKeyInput.value.trim());
       setStatus("API key saved.");
@@ -425,12 +443,14 @@
         : "No active stages.";
 
       const failures = data.recent_failures || [];
+      const openFailures = getOpenFailureIds();
       clearNode(fields.failures);
       if (!failures.length) {
         fields.failures.textContent = "No recent failures.";
         return;
       }
       failures.forEach((item) => {
+        const failureId = String(item.id);
         const wrapper = document.createElement("div");
         wrapper.className = "list";
         const row = document.createElement("div");
@@ -477,6 +497,7 @@
 
         const details = document.createElement("details");
         details.className = "collapse";
+        details.open = openFailures.has(failureId);
         const summary = document.createElement("summary");
         summary.className = "row";
         summary.appendChild(createPill("Details"));
@@ -485,6 +506,14 @@
         summaryHint.textContent = "Show error message and metadata";
         summary.appendChild(summaryHint);
         details.appendChild(summary);
+        details.addEventListener("toggle", () => {
+          if (details.open) {
+            openFailures.add(failureId);
+          } else {
+            openFailures.delete(failureId);
+          }
+          saveOpenFailureIds(openFailures);
+        });
 
         const body = document.createElement("div");
         body.className = "panel";
@@ -518,24 +547,40 @@
           pushMeta("Comparison ID", item.comparison_id);
         }
 
-        if (item.error_message) {
+        if (item.error_message || item.error_details_json) {
           const detailActions = document.createElement("div");
           detailActions.className = "row";
           const copyBtn = document.createElement("button");
           copyBtn.className = "ghost";
           copyBtn.type = "button";
           copyBtn.textContent = "Copy error";
+          const detailsText = item.error_details_json
+            ? JSON.stringify(item.error_details_json, null, 2)
+            : "";
+          const copyText = item.error_message
+            ? detailsText
+              ? `${item.error_message}\n\n${detailsText}`
+              : item.error_message
+            : detailsText;
           copyBtn.addEventListener("click", async () => {
-            const ok = await copyToClipboard(item.error_message);
+            const ok = await copyToClipboard(copyText);
             setStatus(ok ? "Error copied to clipboard." : "Copy failed.", !ok);
           });
           detailActions.appendChild(copyBtn);
           body.appendChild(detailActions);
-          const msg = document.createElement("div");
-          msg.className = "metrics";
-          msg.textContent = item.error_message;
           body.appendChild(meta);
-          body.appendChild(msg);
+          if (item.error_message) {
+            const msg = document.createElement("div");
+            msg.className = "metrics";
+            msg.textContent = item.error_message;
+            body.appendChild(msg);
+          }
+          if (detailsText) {
+            const details = document.createElement("div");
+            details.className = "metrics";
+            details.textContent = detailsText;
+            body.appendChild(details);
+          }
         } else {
           body.appendChild(meta);
         }
