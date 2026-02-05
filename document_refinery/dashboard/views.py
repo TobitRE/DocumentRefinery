@@ -84,6 +84,22 @@ class DashboardSummaryView(APIView):
                 "finished_at",
             )
         )
+        recent_finished = list(
+            jobs.filter(finished_at__isnull=False)
+            .order_by("-finished_at")[:10]
+            .values(
+                "id",
+                "document_id",
+                "comparison_id",
+                "profile",
+                "status",
+                "error_code",
+                "error_message",
+                "stage",
+                "duration_ms",
+                "finished_at",
+            )
+        )
 
         payload = {
             "jobs": {
@@ -108,6 +124,7 @@ class DashboardSummaryView(APIView):
                 ),
             },
             "recent_failures": recent_failures,
+            "recent_finished": recent_finished,
             "throughput": {
                 "jobs_24h": jobs.filter(created_at__gte=since_24h).count(),
                 "jobs_7d": jobs.filter(created_at__gte=since_7d).count(),

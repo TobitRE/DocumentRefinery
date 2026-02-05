@@ -217,7 +217,7 @@
         color: var(--muted);
       }
 
-      .field input,
+      .field input:not([type="checkbox"]):not([type="radio"]),
       .field textarea,
       .field select {
         padding: 12px 14px;
@@ -235,6 +235,13 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .pill input[type="checkbox"],
+      .pill input[type="radio"] {
+        width: auto;
+        margin: 0;
+        flex: 0 0 auto;
       }
 
       .field textarea {
