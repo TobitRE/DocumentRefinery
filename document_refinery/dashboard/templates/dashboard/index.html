@@ -403,6 +403,8 @@
         return;
       }
       failures.forEach((item) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "list";
         const row = document.createElement("div");
         row.className = "row";
         row.appendChild(
@@ -443,7 +445,63 @@
           actions.appendChild(restart);
         }
         row.appendChild(actions);
-        fields.failures.appendChild(row);
+        wrapper.appendChild(row);
+
+        const details = document.createElement("details");
+        details.className = "collapse";
+        const summary = document.createElement("summary");
+        summary.className = "row";
+        summary.appendChild(createPill("Details"));
+        const summaryHint = document.createElement("span");
+        summaryHint.className = "muted";
+        summaryHint.textContent = "Show error message and metadata";
+        summary.appendChild(summaryHint);
+        details.appendChild(summary);
+
+        const body = document.createElement("div");
+        body.className = "panel";
+        const meta = document.createElement("div");
+        meta.className = "list";
+        const pushMeta = (label, value) => {
+          const line = document.createElement("div");
+          line.className = "mono";
+          line.textContent = `${label}: ${value || "—"}`;
+          meta.appendChild(line);
+        };
+        pushMeta("Status", item.status);
+        pushMeta("Stage", item.stage);
+        pushMeta("Profile", item.profile);
+        pushMeta(
+          "Attempts",
+          `${item.attempt ?? "—"} / ${item.max_retries ?? "—"}`
+        );
+        if (item.finished_at) {
+          pushMeta(
+            "Finished",
+            new Date(item.finished_at).toLocaleString()
+          );
+        } else {
+          pushMeta("Finished", "—");
+        }
+        if (item.document_id) {
+          pushMeta("Document ID", item.document_id);
+        }
+        if (item.comparison_id) {
+          pushMeta("Comparison ID", item.comparison_id);
+        }
+
+        if (item.error_message) {
+          const msg = document.createElement("div");
+          msg.className = "metrics";
+          msg.textContent = item.error_message;
+          body.appendChild(meta);
+          body.appendChild(msg);
+        } else {
+          body.appendChild(meta);
+        }
+        details.appendChild(body);
+        wrapper.appendChild(details);
+        fields.failures.appendChild(wrapper);
       });
     }
 

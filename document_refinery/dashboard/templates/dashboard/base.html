@@ -289,6 +289,23 @@
         min-width: 0;
       }
 
+      details.collapse {
+        display: grid;
+        gap: 10px;
+      }
+
+      details.collapse summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      details.collapse summary::-webkit-details-marker {
+        display: none;
+      }
+
       .row {
         display: flex;
         gap: 12px;

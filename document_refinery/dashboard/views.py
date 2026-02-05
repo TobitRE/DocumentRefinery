@@ -76,6 +76,8 @@ class DashboardSummaryView(APIView):
                 "profile",
                 "status",
                 "error_code",
+                "error_message",
+                "stage",
                 "attempt",
                 "max_retries",
                 "finished_at",
