@@ -74,6 +74,15 @@ def build_profile_pipeline_options(profile: str | None):
     if not definition:
         return None
     pipeline_options = definition.get("pipeline_options") or {}
+    if isinstance(pipeline_options, dict) and "ocr_options" in pipeline_options:
+        ocr_options = pipeline_options.get("ocr_options")
+        if isinstance(ocr_options, dict):
+            normalized = dict(ocr_options)
+            if "kind" not in normalized:
+                normalized["kind"] = "auto"
+            if normalized.get("kind") == "auto" and "lang" not in normalized:
+                normalized["lang"] = []
+            pipeline_options = {**pipeline_options, "ocr_options": normalized}
     if not pipeline_options:
         return None
     from docling.datamodel.pipeline_options import PdfPipelineOptions
