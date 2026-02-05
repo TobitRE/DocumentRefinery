@@ -19,7 +19,7 @@ PROFILE_DEFINITIONS: dict[str, dict] = {
             "do_table_structure": False,
             "do_picture_description": False,
             "do_picture_classification": False,
-            "ocr_options": {"lang": ["auto"], "force_full_page_ocr": True},
+            "ocr_options": {"kind": "auto", "force_full_page_ocr": True},
         },
         "exports": ["text", "markdown", "doctags"],
     },
