@@ -106,6 +106,7 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
   if [ -f ".env" ]; then
     DATA_ROOT=$(grep '^DATA_ROOT=' .env | cut -d '=' -f2-)
     DATABASE_URL=$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)
+    HF_HOME=$(grep '^HF_HOME=' .env | cut -d '=' -f2-)
   fi
   if [ -n "${DATABASE_URL:-}" ]; then
     DATABASE_URL="${DATABASE_URL%\"}"
@@ -116,10 +117,17 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
   if [ -z "${DATA_ROOT}" ]; then
     DATA_ROOT="/var/lib/docling_service"
   fi
+  if [ -z "${HF_HOME:-}" ]; then
+    HF_HOME=""
+  fi
   DATA_ROOT="${DATA_ROOT%\"}"
   DATA_ROOT="${DATA_ROOT#\"}"
   DATA_ROOT="${DATA_ROOT%\'}"
   DATA_ROOT="${DATA_ROOT#\'}"
+  HF_HOME="${HF_HOME%\"}"
+  HF_HOME="${HF_HOME#\"}"
+  HF_HOME="${HF_HOME%\'}"
+  HF_HOME="${HF_HOME#\'}"
   TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
   mkdir -p "${BACKUP_DIR}"
   if [ -f ".env" ]; then
@@ -196,6 +204,62 @@ if has_unit "clamav-freshclam.service"; then
   sudo systemctl enable --now clamav-freshclam || print_warning "clamav-freshclam start failed"
 else
   print_warning "clamav-freshclam service not found"
+fi
+
+print_status "Checking ClamAV access..."
+CLAMAV_SOCKET=""
+DATA_ROOT=""
+if [ -f ".env" ]; then
+  CLAMAV_SOCKET=$(grep '^CLAMAV_SOCKET=' .env | cut -d '=' -f2-)
+  DATA_ROOT=$(grep '^DATA_ROOT=' .env | cut -d '=' -f2-)
+fi
+if [ -z "${DATA_ROOT}" ]; then
+  DATA_ROOT="/var/lib/docling_service"
+fi
+DATA_ROOT="${DATA_ROOT%\"}"
+DATA_ROOT="${DATA_ROOT#\"}"
+DATA_ROOT="${DATA_ROOT%\'}"
+DATA_ROOT="${DATA_ROOT#\'}"
+
+SERVICE_USER=""
+if has_unit "celery-worker.service"; then
+  SERVICE_USER=$(systemctl show -p User --value celery-worker.service 2>/dev/null || true)
+fi
+if [ -z "${SERVICE_USER}" ]; then
+  SERVICE_USER="$(whoami)"
+fi
+
+HF_HOME_DEFAULT="${DATA_ROOT}/hf_cache"
+if [ -z "${HF_HOME}" ]; then
+  print_warning "HF_HOME not set; docling downloads may fail when ProtectHome=read-only. Add HF_HOME=${HF_HOME_DEFAULT} to .env"
+else
+  sudo mkdir -p "${HF_HOME}" || print_warning "Failed to create HF_HOME at ${HF_HOME}"
+  sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${HF_HOME}" || print_warning "Failed to set ownership on ${HF_HOME}"
+fi
+
+if [ -n "${CLAMAV_SOCKET}" ]; then
+  if [ -S "${CLAMAV_SOCKET}" ]; then
+    SOCK_GROUP=$(stat -c %G "${CLAMAV_SOCKET}" 2>/dev/null || true)
+    if [ -n "${SOCK_GROUP}" ] && ! id -nG "${SERVICE_USER}" | grep -qw "${SOCK_GROUP}"; then
+      print_warning "${SERVICE_USER} is not in ${SOCK_GROUP}; adding to allow socket access"
+      sudo usermod -aG "${SOCK_GROUP}" "${SERVICE_USER}" || print_warning "Failed to add ${SERVICE_USER} to ${SOCK_GROUP}"
+    fi
+  else
+    print_warning "CLAMAV_SOCKET is set but socket not found: ${CLAMAV_SOCKET}"
+  fi
+else
+  if [ -S "/run/clamav/clamd.ctl" ]; then
+    print_warning "ClamAV is socket-activated. Consider setting CLAMAV_SOCKET=/run/clamav/clamd.ctl"
+  fi
+fi
+
+if command -v setfacl >/dev/null 2>&1; then
+  sudo find "${DATA_ROOT}" -type d -exec setfacl -m u:clamav:rx -m d:u:clamav:rx {} + || \
+    print_warning "Failed to set clamd ACLs on DATA_ROOT directories"
+  sudo find "${DATA_ROOT}" -type f -exec setfacl -m u:clamav:r {} + || \
+    print_warning "Failed to set clamd ACLs on DATA_ROOT files"
+else
+  print_warning "setfacl not installed; cannot set clamd ACLs on DATA_ROOT"
 fi
 
 print_status "Warming up..."

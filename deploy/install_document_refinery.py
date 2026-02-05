@@ -429,6 +429,7 @@ except Exception as exc:
         allowed_hosts_default = domain_name or "localhost,127.0.0.1"
         allowed_hosts = get_input("ALLOWED_HOSTS (comma-separated)", allowed_hosts_default)
         data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
+        hf_home = os.path.join(data_root, "hf_cache")
         static_root = get_input("STATIC_ROOT", f"{repo_root.parent}/staticfiles")
         broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
@@ -507,15 +508,21 @@ except Exception as exc:
 
         if not env_path.exists():
             template_text = env_example.read_text(encoding="utf-8")
+            clamav_socket = ""
+            if Path("/run/clamav/clamd.ctl").exists():
+                clamav_socket = "/run/clamav/clamd.ctl"
             overrides = {
                 "SECRET_KEY": secret_key,
                 "DEBUG": "true" if debug_mode else "false",
                 "ALLOWED_HOSTS": allowed_hosts,
                 "DATA_ROOT": data_root,
+                "HF_HOME": hf_home,
                 "STATIC_ROOT": static_root,
                 "CELERY_BROKER_URL": broker_url,
                 "INTERNAL_ENDPOINTS_TOKEN": internal_token,
             }
+            if clamav_socket:
+                overrides["CLAMAV_SOCKET"] = clamav_socket
             if database_url:
                 overrides["DATABASE_URL"] = database_url
             write_file(env_path, render_env(template_text, overrides), mode=0o640)
@@ -550,6 +557,36 @@ except Exception as exc:
         Path(data_root).mkdir(parents=True, exist_ok=True)
         run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", data_root])
         run_cmd(["chmod", "-R", "g+rx", data_root])
+        hf_home = sanitize_env_value(env_values.get("HF_HOME"))
+        if not hf_home or hf_home.startswith("$"):
+            hf_home = os.path.join(data_root, "hf_cache")
+        Path(hf_home).mkdir(parents=True, exist_ok=True)
+        run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", hf_home], required=False)
+        run_cmd(["chmod", "-R", "g+rx", hf_home], required=False)
+        if group_exists("clamav"):
+            run_cmd(["usermod", "-aG", "clamav", service_user], required=False)
+        if shutil.which("setfacl"):
+            run_cmd(
+                [
+                    "find",
+                    data_root,
+                    "-type",
+                    "d",
+                    "-exec",
+                    "setfacl",
+                    "-m",
+                    "u:clamav:rx",
+                    "-m",
+                    "d:u:clamav:rx",
+                    "{}",
+                    "+",
+                ],
+                required=False,
+            )
+            run_cmd(
+                ["find", data_root, "-type", "f", "-exec", "setfacl", "-m", "u:clamav:r", "{}", "+"],
+                required=False,
+            )
         Path(static_root).mkdir(parents=True, exist_ok=True)
         run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", static_root])
         run_cmd(["chmod", "-R", "g+rx", static_root])
