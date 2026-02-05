@@ -138,11 +138,36 @@
         </div>
         <div class="field">
           <label>Profiles</label>
-          <div class="list">
-            <label class="pill"><input type="checkbox" name="compareProfiles" value="fast_text" /> fast_text</label>
-            <label class="pill"><input type="checkbox" name="compareProfiles" value="ocr_only" /> ocr_only</label>
-            <label class="pill"><input type="checkbox" name="compareProfiles" value="structured" /> structured</label>
-            <label class="pill"><input type="checkbox" name="compareProfiles" value="full_vlm" /> full_vlm</label>
+          <div class="list" id="profileList">
+            <div class="row">
+              <label class="pill"><input type="checkbox" name="compareProfiles" value="fast_text" /> fast_text</label>
+              <span class="muted">Born-digital PDFs, lowest latency.</span>
+              <span class="pill">Speed: fast</span>
+              <span class="pill">Quality: medium</span>
+            </div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" name="compareProfiles" value="ocr_only" /> ocr_only</label>
+              <span class="muted">Scanned PDFs, OCR-only.</span>
+              <span class="pill">Speed: medium</span>
+              <span class="pill">Quality: text only</span>
+            </div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" name="compareProfiles" value="structured" /> structured</label>
+              <span class="muted">OCR + tables/layout focus.</span>
+              <span class="pill">Speed: slower</span>
+              <span class="pill">Quality: high</span>
+            </div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" name="compareProfiles" value="full_vlm" /> full_vlm</label>
+              <span class="muted">OCR + tables + image enrichment.</span>
+              <span class="pill">Speed: slowest</span>
+              <span class="pill">Quality: highest</span>
+            </div>
+          </div>
+          <div class="panel muted">
+            Recommendation: born-digital documents → <span class="mono">fast_text</span>. Scanned
+            documents → <span class="mono">ocr_only</span>. If you need tables or layout fidelity,
+            try <span class="mono">structured</span> or <span class="mono">full_vlm</span>.
           </div>
         </div>
         <div class="field">
@@ -161,6 +186,52 @@
         </div>
         <div class="panel" id="compareResult">No comparison yet.</div>
       </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Comparison review</h3>
+    <div class="list">
+      <div class="row">
+        <label class="pill"><input type="checkbox" id="compareFilterErrors" /> Show errors only</label>
+        <label class="pill"><input type="checkbox" id="compareDiffOnly" /> Show only changes</label>
+        <span class="muted">Diff uses a limited line window for large outputs.</span>
+      </div>
+      <div class="panel" id="comparisonSummary">No comparison loaded.</div>
+      <div class="row">
+        <div class="field" style="min-width: 220px;">
+          <label for="compareJobA">Job A</label>
+          <select id="compareJobA"></select>
+        </div>
+        <div class="field" style="min-width: 220px;">
+          <label for="compareJobB">Job B</label>
+          <select id="compareJobB"></select>
+        </div>
+        <div class="field" style="min-width: 220px;">
+          <label for="compareArtifactKind">Artifact kind</label>
+          <select id="compareArtifactKind">
+            <option value="markdown">markdown</option>
+            <option value="text">text</option>
+            <option value="doctags">doctags</option>
+            <option value="docling_json">docling_json</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="compareLoadBtn" type="button">Load previews</button>
+          <button class="ghost" id="compareClearBtn" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="panel">
+          <div class="muted">Preview A</div>
+          <pre class="metrics" id="comparePreviewA">No preview loaded.</pre>
+        </div>
+        <div class="panel">
+          <div class="muted">Preview B</div>
+          <pre class="metrics" id="comparePreviewB">No preview loaded.</pre>
+        </div>
+      </div>
+      <div class="panel metrics" id="compareDiffPanel">No diff yet.</div>
     </div>
   </section>
 
@@ -197,7 +268,23 @@
     const compareIdInput = document.getElementById("compareIdInput");
     const compareFetchBtn = document.getElementById("compareFetchBtn");
     const compareResult = document.getElementById("compareResult");
+    const comparisonSummary = document.getElementById("comparisonSummary");
+    const compareFilterErrors = document.getElementById("compareFilterErrors");
+    const compareDiffOnly = document.getElementById("compareDiffOnly");
+    const compareJobA = document.getElementById("compareJobA");
+    const compareJobB = document.getElementById("compareJobB");
+    const compareArtifactKind = document.getElementById("compareArtifactKind");
+    const compareLoadBtn = document.getElementById("compareLoadBtn");
+    const compareClearBtn = document.getElementById("compareClearBtn");
+    const comparePreviewA = document.getElementById("comparePreviewA");
+    const comparePreviewB = document.getElementById("comparePreviewB");
+    const compareDiffPanel = document.getElementById("compareDiffPanel");
     let pollTimer = null;
+    let comparisonJobs = [];
+    const comparisonArtifacts = new Map();
+    const comparisonStats = new Map();
+    const comparisonTextCache = new Map();
+    let lastDiffPayload = null;
 
     const fields = {
       queued: document.getElementById("statQueued"),
@@ -333,6 +420,334 @@
       return `${mins}m`;
     }
 
+    function formatDuration(ms) {
+      if (ms === null || ms === undefined) return "—";
+      if (ms < 1000) return `${ms} ms`;
+      return `${(ms / 1000).toFixed(1)} s`;
+    }
+
+    function clearNode(node) {
+      while (node.firstChild) {
+        node.removeChild(node.firstChild);
+      }
+    }
+
+    function createPill(text) {
+      const pill = document.createElement("span");
+      pill.className = "pill";
+      pill.textContent = text;
+      return pill;
+    }
+
+    function jobUsesOcr(profile) {
+      return ["ocr_only", "structured", "full_vlm"].includes(profile);
+    }
+
+    function truncateText(text, limit = 5000) {
+      if (!text) return { text: "", truncated: false };
+      if (text.length <= limit) return { text, truncated: false };
+      return { text: `${text.slice(0, limit)}\n…(truncated)…`, truncated: true };
+    }
+
+    async function loadArtifacts(jobId) {
+      if (comparisonArtifacts.has(jobId)) {
+        return comparisonArtifacts.get(jobId);
+      }
+      const artifacts = await fetchJson(`/v1/artifacts/?job_id=${jobId}`);
+      comparisonArtifacts.set(jobId, artifacts);
+      return artifacts;
+    }
+
+    async function loadArtifactText(jobId, kind) {
+      const cacheKey = `${jobId}:${kind}`;
+      if (comparisonTextCache.has(cacheKey)) {
+        return comparisonTextCache.get(cacheKey);
+      }
+      const artifacts = await loadArtifacts(jobId);
+      const artifact = artifacts.find((item) => item.kind === kind);
+      if (!artifact) {
+        comparisonTextCache.set(cacheKey, null);
+        return null;
+      }
+      const res = await fetchAuthorized(`/v1/artifacts/${artifact.id}/`);
+      if (!res.ok) {
+        comparisonTextCache.set(cacheKey, null);
+        return null;
+      }
+      const text = await res.text();
+      comparisonTextCache.set(cacheKey, text);
+      return text;
+    }
+
+    async function loadJobStats(job) {
+      if (comparisonStats.has(job.id)) {
+        return comparisonStats.get(job.id);
+      }
+      const stats = {
+        pages: null,
+        ocr_pages: null,
+        pictures: null,
+        tables: null,
+        text_chars: null,
+        chars_per_page: null,
+        confidence: "unknown",
+        artifacts: 0,
+      };
+      const artifacts = await loadArtifacts(job.id);
+      stats.artifacts = artifacts.length;
+
+      const doclingRaw = await loadArtifactText(job.id, "docling_json");
+      if (doclingRaw) {
+        try {
+          const data = JSON.parse(doclingRaw);
+          stats.pages = Array.isArray(data.pages) ? data.pages.length : stats.pages;
+          stats.pictures = Array.isArray(data.pictures) ? data.pictures.length : stats.pictures;
+          if (Array.isArray(data.tables)) {
+            stats.tables = data.tables.length;
+          } else if (Array.isArray(data.table_structures)) {
+            stats.tables = data.table_structures.length;
+          }
+        } catch (err) {
+          // Ignore malformed docling JSON.
+        }
+      }
+
+      const textRaw = await loadArtifactText(job.id, "text");
+      if (textRaw) {
+        stats.text_chars = textRaw.length;
+        if (stats.pages) {
+          stats.chars_per_page = Math.round(stats.text_chars / Math.max(1, stats.pages));
+        }
+      }
+
+      if (stats.pages !== null && jobUsesOcr(job.profile)) {
+        stats.ocr_pages = stats.pages;
+      }
+
+      if (job.status && job.status !== "SUCCEEDED") {
+        stats.confidence = "failed";
+      } else if (stats.chars_per_page !== null && stats.chars_per_page < 200) {
+        stats.confidence = "low";
+      } else if (stats.chars_per_page !== null) {
+        stats.confidence = "ok";
+      }
+
+      comparisonStats.set(job.id, stats);
+      return stats;
+    }
+
+    function populateComparisonSelects(jobs) {
+      const prevA = compareJobA.value;
+      const prevB = compareJobB.value;
+      compareJobA.innerHTML = "";
+      compareJobB.innerHTML = "";
+      const placeholderA = document.createElement("option");
+      placeholderA.value = "";
+      placeholderA.textContent = "Select job A";
+      const placeholderB = document.createElement("option");
+      placeholderB.value = "";
+      placeholderB.textContent = "Select job B";
+      compareJobA.appendChild(placeholderA);
+      compareJobB.appendChild(placeholderB);
+
+      jobs.forEach((job) => {
+        const label = `Job ${job.id} · ${job.profile || "—"} · ${job.status || "—"}`;
+        const optA = document.createElement("option");
+        optA.value = String(job.id);
+        optA.textContent = label;
+        const optB = optA.cloneNode(true);
+        compareJobA.appendChild(optA);
+        compareJobB.appendChild(optB);
+      });
+      if (prevA) compareJobA.value = prevA;
+      if (prevB) compareJobB.value = prevB;
+    }
+
+    function renderComparisonSummary(jobs) {
+      if (!jobs || !jobs.length) {
+        comparisonSummary.textContent = "No comparison loaded.";
+        return;
+      }
+      clearNode(comparisonSummary);
+      const row = document.createElement("div");
+      row.className = "row";
+      const succeeded = jobs.filter((job) => job.status === "SUCCEEDED").length;
+      const failed = jobs.filter((job) =>
+        ["FAILED", "QUARANTINED"].includes(job.status)
+      ).length;
+      row.appendChild(createPill(`Total: ${jobs.length}`));
+      row.appendChild(createPill(`Succeeded: ${succeeded}`));
+      row.appendChild(createPill(`Failed: ${failed}`));
+
+      let winner = null;
+      let winnerReason = "";
+      const candidates = jobs.filter((job) => job.status === "SUCCEEDED");
+      if (candidates.length) {
+        candidates.sort((a, b) => {
+          const statsA = comparisonStats.get(a.id) || {};
+          const statsB = comparisonStats.get(b.id) || {};
+          const artifactsA = statsA.artifacts || 0;
+          const artifactsB = statsB.artifacts || 0;
+          if (artifactsA !== artifactsB) return artifactsB - artifactsA;
+          const coverageA = statsA.chars_per_page || 0;
+          const coverageB = statsB.chars_per_page || 0;
+          if (coverageA !== coverageB) return coverageB - coverageA;
+          const durationA = a.duration_ms || Number.MAX_SAFE_INTEGER;
+          const durationB = b.duration_ms || Number.MAX_SAFE_INTEGER;
+          return durationA - durationB;
+        });
+        winner = candidates[0];
+        winnerReason = "Most artifacts and strongest text coverage among successful runs.";
+        row.appendChild(
+          createPill(`Suggested: Job ${winner.id} (${winner.profile || "—"})`)
+        );
+      }
+
+      comparisonSummary.appendChild(row);
+      if (winnerReason) {
+        const note = document.createElement("div");
+        note.className = "muted";
+        note.textContent = winnerReason;
+        comparisonSummary.appendChild(note);
+      }
+    }
+
+    function diffLines(aText, bText) {
+      const maxLines = 400;
+      const aLinesFull = (aText || "").split("\n");
+      const bLinesFull = (bText || "").split("\n");
+      const truncated = aLinesFull.length > maxLines || bLinesFull.length > maxLines;
+      const aLines = aLinesFull.slice(0, maxLines);
+      const bLines = bLinesFull.slice(0, maxLines);
+      const maxCells = 50000;
+      if (aLines.length * bLines.length > maxCells) {
+        return {
+          lines: [{ type: "info", text: "Diff skipped: output too large." }],
+          truncated: true,
+        };
+      }
+      const dp = Array.from({ length: aLines.length + 1 }, () =>
+        Array(bLines.length + 1).fill(0)
+      );
+      for (let i = aLines.length - 1; i >= 0; i -= 1) {
+        for (let j = bLines.length - 1; j >= 0; j -= 1) {
+          if (aLines[i] === bLines[j]) {
+            dp[i][j] = dp[i + 1][j + 1] + 1;
+          } else {
+            dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+          }
+        }
+      }
+
+      const lines = [];
+      let i = 0;
+      let j = 0;
+      while (i < aLines.length && j < bLines.length) {
+        if (aLines[i] === bLines[j]) {
+          lines.push({ type: "equal", text: aLines[i] });
+          i += 1;
+          j += 1;
+        } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+          lines.push({ type: "remove", text: aLines[i] });
+          i += 1;
+        } else {
+          lines.push({ type: "add", text: bLines[j] });
+          j += 1;
+        }
+      }
+      while (i < aLines.length) {
+        lines.push({ type: "remove", text: aLines[i] });
+        i += 1;
+      }
+      while (j < bLines.length) {
+        lines.push({ type: "add", text: bLines[j] });
+        j += 1;
+      }
+      return { lines, truncated };
+    }
+
+    function renderDiff(textA, textB) {
+      clearNode(compareDiffPanel);
+      if (!textA || !textB) {
+        compareDiffPanel.textContent = "Select two jobs and load previews to see a diff.";
+        return;
+      }
+      const result = diffLines(textA, textB);
+      if (result.truncated) {
+        const note = document.createElement("div");
+        note.className = "muted";
+        note.textContent = "Diff truncated to a limited line window.";
+        compareDiffPanel.appendChild(note);
+      }
+      const showOnlyChanges = compareDiffOnly.checked;
+      result.lines.forEach((line) => {
+        if (showOnlyChanges && line.type === "equal") {
+          return;
+        }
+        const row = document.createElement("div");
+        if (line.type === "add") {
+          row.style.color = "#1b6e2e";
+          row.textContent = `+ ${line.text}`;
+        } else if (line.type === "remove") {
+          row.style.color = "#9b2c1a";
+          row.textContent = `- ${line.text}`;
+        } else if (line.type === "info") {
+          row.className = "muted";
+          row.textContent = line.text;
+        } else {
+          row.style.color = "#6c5f55";
+          row.textContent = `  ${line.text}`;
+        }
+        compareDiffPanel.appendChild(row);
+      });
+    }
+
+    async function loadComparisonPreviews() {
+      const jobA = compareJobA.value;
+      const jobB = compareJobB.value;
+      const kind = compareArtifactKind.value;
+      if (!jobA || !jobB) {
+        setStatus("Select Job A and Job B.", true);
+        return;
+      }
+      comparePreviewA.textContent = "Loading preview...";
+      comparePreviewB.textContent = "Loading preview...";
+      try {
+        const [textA, textB] = await Promise.all([
+          loadArtifactText(jobA, kind),
+          loadArtifactText(jobB, kind),
+        ]);
+        if (!textA) {
+          comparePreviewA.textContent = "Artifact not available for Job A.";
+        } else {
+          const trimmed = truncateText(textA);
+          comparePreviewA.textContent = trimmed.text;
+        }
+        if (!textB) {
+          comparePreviewB.textContent = "Artifact not available for Job B.";
+        } else {
+          const trimmed = truncateText(textB);
+          comparePreviewB.textContent = trimmed.text;
+        }
+        lastDiffPayload = { textA: textA || "", textB: textB || "" };
+        renderDiff(lastDiffPayload.textA, lastDiffPayload.textB);
+      } catch (err) {
+        comparePreviewA.textContent = "Failed to load preview.";
+        comparePreviewB.textContent = "Failed to load preview.";
+        compareDiffPanel.textContent = "Diff unavailable.";
+      }
+    }
+
+    function clearComparisonReview() {
+      compareJobA.value = "";
+      compareJobB.value = "";
+      compareArtifactKind.value = "markdown";
+      comparePreviewA.textContent = "No preview loaded.";
+      comparePreviewB.textContent = "No preview loaded.";
+      compareDiffPanel.textContent = "No diff yet.";
+      lastDiffPayload = null;
+    }
+
     function renderSystem(data) {
       const cpu = data.cpu || {};
       const mem = data.memory || {};
@@ -404,26 +819,96 @@
       );
     }
 
+    function isErrorJob(job) {
+      return ["FAILED", "QUARANTINED"].includes(job.status) || !!job.error_code;
+    }
+
     function renderComparisonJobs(jobs) {
+      clearNode(compareResult);
       if (!jobs || !jobs.length) {
         compareResult.textContent = "No comparison jobs found.";
         return;
       }
-      compareResult.innerHTML = jobs
-        .map(
-          (job) => `
-            <div class="row" style="justify-content: space-between;">
-              <div class="mono">Job ${job.id} · ${job.profile || "—"} · ${job.status || "—"}</div>
-              <button class="secondary" data-job-id="${job.id}">Load</button>
-            </div>
-          `
-        )
-        .join("");
-      compareResult.querySelectorAll("button[data-job-id]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          jobIdInput.value = btn.dataset.jobId;
-          fetchJob(btn.dataset.jobId);
+      const filtered = compareFilterErrors.checked
+        ? jobs.filter((job) => isErrorJob(job))
+        : jobs;
+      if (!filtered.length) {
+        compareResult.textContent = "No comparison jobs match the current filter.";
+        return;
+      }
+
+      filtered.forEach((job) => {
+        const block = document.createElement("div");
+        block.className = "list";
+        const row = document.createElement("div");
+        row.className = "row";
+        row.appendChild(createPill(`Job ${job.id}`));
+        row.appendChild(createPill(`Profile: ${job.profile || "—"}`));
+        row.appendChild(createPill(`Status: ${job.status || "—"}`));
+        if (job.duration_ms !== null && job.duration_ms !== undefined) {
+          row.appendChild(createPill(`Duration: ${formatDuration(job.duration_ms)}`));
+        }
+        if (job.error_code) {
+          row.appendChild(createPill(`Error: ${job.error_code}`));
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "row";
+        actions.style.marginLeft = "auto";
+
+        const setA = document.createElement("button");
+        setA.className = "secondary";
+        setA.type = "button";
+        setA.textContent = "Set A";
+        setA.addEventListener("click", () => {
+          compareJobA.value = String(job.id);
         });
+
+        const setB = document.createElement("button");
+        setB.className = "secondary";
+        setB.type = "button";
+        setB.textContent = "Set B";
+        setB.addEventListener("click", () => {
+          compareJobB.value = String(job.id);
+        });
+
+        const load = document.createElement("button");
+        load.className = "ghost";
+        load.type = "button";
+        load.textContent = "Load";
+        load.addEventListener("click", () => {
+          jobIdInput.value = String(job.id);
+          fetchJob(job.id);
+        });
+
+        actions.appendChild(setA);
+        actions.appendChild(setB);
+        actions.appendChild(load);
+        row.appendChild(actions);
+        block.appendChild(row);
+
+        const stats = comparisonStats.get(job.id);
+        if (stats) {
+          const statsRow = document.createElement("div");
+          statsRow.className = "row";
+          statsRow.appendChild(createPill(`Artifacts: ${stats.artifacts ?? 0}`));
+          statsRow.appendChild(createPill(`Pages: ${stats.pages ?? "—"}`));
+          statsRow.appendChild(createPill(`OCR pages: ${stats.ocr_pages ?? "—"}`));
+          statsRow.appendChild(createPill(`Pictures: ${stats.pictures ?? "—"}`));
+          statsRow.appendChild(createPill(`Tables: ${stats.tables ?? "—"}`));
+          statsRow.appendChild(
+            createPill(`Chars/page: ${stats.chars_per_page ?? "—"}`)
+          );
+          statsRow.appendChild(createPill(`Confidence: ${stats.confidence}`));
+          block.appendChild(statsRow);
+        } else {
+          const note = document.createElement("div");
+          note.className = "muted";
+          note.textContent = "Loading stats…";
+          block.appendChild(note);
+        }
+
+        compareResult.appendChild(block);
       });
     }
 
@@ -434,9 +919,19 @@
       }
       try {
         const jobs = await fetchJson(`/v1/jobs/?comparison_id=${comparisonId}`);
-        renderComparisonJobs(jobs);
+        comparisonJobs = jobs;
+        comparisonArtifacts.clear();
+        comparisonStats.clear();
+        comparisonTextCache.clear();
+        renderComparisonJobs(comparisonJobs);
+        populateComparisonSelects(comparisonJobs);
+        comparisonSummary.textContent = "Loading comparison summary...";
+        await Promise.all(comparisonJobs.map((job) => loadJobStats(job)));
+        renderComparisonJobs(comparisonJobs);
+        renderComparisonSummary(comparisonJobs);
       } catch (err) {
         compareResult.textContent = "Failed to load comparison jobs.";
+        comparisonSummary.textContent = "Comparison summary unavailable.";
       }
     }
 
@@ -686,12 +1181,29 @@
       event.preventDefault();
       fetchComparison(compareIdInput.value.trim());
     });
+    compareFilterErrors.addEventListener("change", () => {
+      renderComparisonJobs(comparisonJobs);
+    });
+    compareDiffOnly.addEventListener("change", () => {
+      if (lastDiffPayload) {
+        renderDiff(lastDiffPayload.textA, lastDiffPayload.textB);
+      }
+    });
+    compareLoadBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      loadComparisonPreviews();
+    });
+    compareClearBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      clearComparisonReview();
+    });
     autoRefresh.addEventListener("change", () => {
       if (autoRefresh.checked) {
         setStatus("Auto-refresh enabled.");
       }
     });
 
+    populateComparisonSelects([]);
     loadSavedKey();
     if (apiKeyInput.value.trim()) {
       refresh();
