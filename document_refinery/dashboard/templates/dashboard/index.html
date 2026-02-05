@@ -145,6 +145,7 @@
           <button class="ghost" id="togglePollBtn" type="button">Start polling</button>
         </div>
         <div class="panel" id="jobStatusPanel">No job loaded.</div>
+        <div class="actions" id="jobActions"></div>
         <div class="panel" id="artifactPanel">No artifacts.</div>
       </div>
     </div>
@@ -283,6 +284,7 @@
     const fetchJobBtn = document.getElementById("fetchJobBtn");
     const togglePollBtn = document.getElementById("togglePollBtn");
     const jobStatusPanel = document.getElementById("jobStatusPanel");
+    const jobActions = document.getElementById("jobActions");
     const artifactPanel = document.getElementById("artifactPanel");
     const compareDocumentId = document.getElementById("compareDocumentId");
     const compareOptionsJson = document.getElementById("compareOptionsJson");
@@ -816,6 +818,7 @@
     function renderJobStatus(job) {
       if (!job) {
         jobStatusPanel.textContent = "No job loaded.";
+        jobActions.innerHTML = "";
         return;
       }
       const status = job.status || "—";
@@ -832,8 +835,26 @@
           <div class="pill">Started: ${job.started_at || "—"}</div>
           <div class="pill">Finished: ${job.finished_at || "—"}</div>
           <div class="pill">Error: ${error}</div>
+          <div class="pill">Attempts: ${job.attempt ?? "—"} / ${job.max_retries ?? "—"}</div>
         </div>
       `;
+      jobActions.innerHTML = "";
+      if (canRetryJob(job)) {
+        const retryBtn = document.createElement("button");
+        retryBtn.className = "secondary";
+        retryBtn.type = "button";
+        retryBtn.textContent = "Retry job";
+        retryBtn.addEventListener("click", async () => {
+          const updated = await retryJob(job.id);
+          if (updated) {
+            renderJobStatus(updated);
+            if (compareIdInput.value.trim()) {
+              await fetchComparison(compareIdInput.value.trim());
+            }
+          }
+        });
+        jobActions.appendChild(retryBtn);
+      }
     }
 
     function selectedCompareProfiles() {
@@ -850,6 +871,33 @@
 
     function isErrorJob(job) {
       return ["FAILED", "QUARANTINED"].includes(job.status) || !!job.error_code;
+    }
+
+    function canRetryJob(job) {
+      if (!job) return false;
+      if (!["FAILED", "QUARANTINED"].includes(job.status)) return false;
+      if (job.attempt === null || job.attempt === undefined) return true;
+      if (job.max_retries === null || job.max_retries === undefined) return true;
+      return job.attempt < job.max_retries;
+    }
+
+    async function retryJob(jobId) {
+      if (!jobId) return;
+      try {
+        const res = await fetchAuthorized(`/v1/jobs/${jobId}/retry/`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          setStatus(`Retry failed (${res.status})`, true);
+          return null;
+        }
+        const job = await res.json();
+        setStatus(`Job ${job.id} re-queued.`);
+        return job;
+      } catch (err) {
+        setStatus("Retry failed.", true);
+        return null;
+      }
     }
 
     function renderComparisonJobs(jobs) {
@@ -880,6 +928,7 @@
         if (job.error_code) {
           row.appendChild(createPill(`Error: ${job.error_code}`));
         }
+        row.appendChild(createPill(`Attempts: ${job.attempt ?? "—"} / ${job.max_retries ?? "—"}`));
 
         const actions = document.createElement("div");
         actions.className = "row";
@@ -909,6 +958,25 @@
           jobIdInput.value = String(job.id);
           fetchJob(job.id);
         });
+
+        if (canRetryJob(job)) {
+          const retry = document.createElement("button");
+          retry.className = "secondary";
+          retry.type = "button";
+          retry.textContent = "Retry";
+          retry.addEventListener("click", async () => {
+            const updated = await retryJob(job.id);
+            if (updated) {
+              const index = comparisonJobs.findIndex((row) => row.id === updated.id);
+              if (index >= 0) {
+                comparisonJobs[index] = updated;
+              }
+              renderComparisonJobs(comparisonJobs);
+              renderComparisonSummary(comparisonJobs);
+            }
+          });
+          actions.appendChild(retry);
+        }
 
         actions.appendChild(setA);
         actions.appendChild(setB);
@@ -1118,8 +1186,23 @@
           body: form,
         });
         if (!res.ok) {
-          setStatus(`Upload failed (${res.status})`, true);
-          uploadResult.textContent = "Upload failed.";
+          let detail = "";
+          let code = "";
+          try {
+            const payload = await res.json();
+            detail = payload.message || "";
+            code = payload.error_code || "";
+          } catch (err) {
+            detail = "";
+          }
+          if (res.status === 409 && code === "DUPLICATE_DOCUMENT") {
+            setStatus("Duplicate document. Use existing document/job and retry if it failed.", true);
+            uploadResult.textContent =
+              "Duplicate document. Open the existing job and use Retry if it failed.";
+          } else {
+            setStatus(`Upload failed (${res.status})`, true);
+            uploadResult.textContent = detail || "Upload failed.";
+          }
           return;
         }
         const payload = await res.json();

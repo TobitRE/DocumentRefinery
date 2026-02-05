@@ -186,6 +186,18 @@ fi
 print_status "Reloading nginx..."
 sudo nginx -t && sudo systemctl reload nginx
 
+print_status "Ensuring ClamAV is running..."
+if has_unit "clamav-daemon.service"; then
+  sudo systemctl enable --now clamav-daemon || print_warning "clamav-daemon start failed"
+else
+  print_warning "clamav-daemon service not found"
+fi
+if has_unit "clamav-freshclam.service"; then
+  sudo systemctl enable --now clamav-freshclam || print_warning "clamav-freshclam start failed"
+else
+  print_warning "clamav-freshclam service not found"
+fi
+
 print_status "Warming up..."
 if [ -f ".env" ]; then
   INTERNAL_TOKEN=$(grep '^INTERNAL_ENDPOINTS_TOKEN=' .env | cut -d '=' -f2-)
