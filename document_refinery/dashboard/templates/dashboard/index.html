@@ -305,6 +305,7 @@
     const compareDiffPanel = document.getElementById("compareDiffPanel");
     let pollTimer = null;
     let comparisonJobs = [];
+    let currentComparisonId = "";
     const comparisonArtifacts = new Map();
     const comparisonStats = new Map();
     const comparisonTextCache = new Map();
@@ -589,8 +590,10 @@
         stats.ocr_pages = stats.pages;
       }
 
-      if (job.status && job.status !== "SUCCEEDED") {
+      if (["FAILED", "QUARANTINED", "CANCELED"].includes(job.status)) {
         stats.confidence = "failed";
+      } else if (job.status && job.status !== "SUCCEEDED") {
+        stats.confidence = "pending";
       } else if (stats.chars_per_page !== null && stats.chars_per_page < 200) {
         stats.confidence = "low";
       } else if (stats.chars_per_page !== null) {
@@ -638,7 +641,7 @@
       row.className = "row";
       const succeeded = jobs.filter((job) => job.status === "SUCCEEDED").length;
       const failed = jobs.filter((job) =>
-        ["FAILED", "QUARANTINED"].includes(job.status)
+        ["FAILED", "QUARANTINED", "CANCELED"].includes(job.status)
       ).length;
       row.appendChild(createPill(`Total: ${jobs.length}`));
       row.appendChild(createPill(`Succeeded: ${succeeded}`));
@@ -1079,7 +1082,13 @@
         } else {
           const note = document.createElement("div");
           note.className = "muted";
-          note.textContent = "Loading stats…";
+          if (job.status === "SUCCEEDED") {
+            note.textContent = "Loading stats…";
+          } else if (["FAILED", "QUARANTINED", "CANCELED"].includes(job.status)) {
+            note.textContent = "No stats available for failed jobs.";
+          } else {
+            note.textContent = "Job still running.";
+          }
           block.appendChild(note);
         }
 
@@ -1087,11 +1096,56 @@
       });
     }
 
+    function clearComparisonCacheForJob(jobId) {
+      comparisonArtifacts.delete(jobId);
+      comparisonStats.delete(jobId);
+      const prefix = `${jobId}:`;
+      for (const key of comparisonTextCache.keys()) {
+        if (key.startsWith(prefix)) {
+          comparisonTextCache.delete(key);
+        }
+      }
+    }
+
+    async function refreshComparisonJobs({ silent = true } = {}) {
+      const comparisonId = compareIdInput.value.trim() || currentComparisonId;
+      if (!comparisonId) {
+        return;
+      }
+      try {
+        const jobs = await fetchJson(`/v1/jobs/?comparison_id=${comparisonId}`);
+        const prevStatus = new Map(comparisonJobs.map((job) => [job.id, job.status]));
+        comparisonJobs = jobs;
+        const statsPromises = [];
+        jobs.forEach((job) => {
+          const previous = prevStatus.get(job.id);
+          if (previous === undefined || previous !== job.status) {
+            clearComparisonCacheForJob(job.id);
+          }
+          if (job.status === "SUCCEEDED" && !comparisonStats.has(job.id)) {
+            statsPromises.push(loadJobStats(job));
+          }
+        });
+        renderComparisonJobs(comparisonJobs);
+        populateComparisonSelects(comparisonJobs);
+        if (statsPromises.length) {
+          await Promise.all(statsPromises);
+          renderComparisonJobs(comparisonJobs);
+        }
+        renderComparisonSummary(comparisonJobs);
+      } catch (err) {
+        if (!silent) {
+          compareResult.textContent = "Failed to refresh comparison jobs.";
+        }
+      }
+    }
+
     async function fetchComparison(comparisonId) {
       if (!comparisonId) {
         setStatus("Provide a comparison id.", true);
         return;
       }
+      currentComparisonId = comparisonId;
       try {
         const jobs = await fetchJson(`/v1/jobs/?comparison_id=${comparisonId}`);
         comparisonJobs = jobs;
@@ -1369,6 +1423,7 @@
         renderSummary(summary);
         renderWorkers(workers);
         renderSystem(system);
+        await refreshComparisonJobs({ silent: true });
         setStatus("Updated just now.");
         lastUpdated.textContent = new Date().toLocaleTimeString();
       } catch (err) {
