@@ -32,6 +32,12 @@ If clamd is remote, ensure:
 - firewall allows port 3310
 - clamd is configured to listen on the network interface
 
+If clamd is socket-activated (default on Ubuntu), use the Unix socket instead:
+```
+CLAMAV_SOCKET=/run/clamav/clamd.ctl
+```
+When `CLAMAV_SOCKET` is set, the TCP host/port are ignored.
+
 ## Nginx (X-Accel-Redirect)
 
 Set:

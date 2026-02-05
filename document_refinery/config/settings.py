@@ -56,6 +56,7 @@ CELERY_TASK_ACKS_LATE = True
 
 CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "127.0.0.1")
 CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
+CLAMAV_SOCKET = os.environ.get("CLAMAV_SOCKET", "")
 
 X_ACCEL_REDIRECT_ENABLED = os.environ.get("X_ACCEL_REDIRECT_ENABLED", "true").lower() == "true"
 X_ACCEL_REDIRECT_LOCATION = os.environ.get("X_ACCEL_REDIRECT_LOCATION", "/protected")

@@ -203,6 +203,13 @@ def _is_canceled(job: IngestionJob) -> bool:
     return job.status == IngestionJobStatus.CANCELED
 
 
+def _clamav_client():
+    socket_path = getattr(settings, "CLAMAV_SOCKET", "")
+    if socket_path:
+        return clamd.ClamdUnixSocket(socket_path)
+    return clamd.ClamdNetworkSocket(settings.CLAMAV_HOST, settings.CLAMAV_PORT)
+
+
 @shared_task(bind=True)
 def scan_pdf_task(self, job_id: int) -> int:
     job = IngestionJob.objects.select_related("document").get(pk=job_id)
@@ -228,7 +235,7 @@ def scan_pdf_task(self, job_id: int) -> int:
         raise RuntimeError("Missing source file")
 
     try:
-        scanner = clamd.ClamdNetworkSocket(settings.CLAMAV_HOST, settings.CLAMAV_PORT)
+        scanner = _clamav_client()
         results = scanner.scan(abs_path)
     except Exception as exc:
         _mark_failed(job, "CLAMAV_UNAVAILABLE", str(exc))
