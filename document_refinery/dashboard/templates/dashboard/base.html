@@ -96,6 +96,7 @@
         border-radius: 20px;
         padding: 18px 20px;
         box-shadow: var(--shadow);
+        min-width: 0;
       }
 
       .card h3 {
@@ -142,6 +143,10 @@
         font-size: 12px;
         line-height: 1.5;
         white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 240px;
+        overflow: auto;
+        min-width: 0;
       }
 
       .list {
@@ -221,6 +226,15 @@
         background: #fff;
         font-size: 14px;
         font-family: inherit;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .field input[type="file"] {
+        padding: 8px 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .field textarea {
@@ -272,6 +286,7 @@
         background: #fff6ea;
         border: 1px dashed #eadfce;
         font-size: 13px;
+        min-width: 0;
       }
 
       .row {
