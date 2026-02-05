@@ -80,9 +80,23 @@ def build_profile_pipeline_options(profile: str | None):
             normalized = dict(ocr_options)
             if "kind" not in normalized:
                 normalized["kind"] = "auto"
-            if normalized.get("kind") == "auto" and "lang" not in normalized:
+            kind = normalized.get("kind")
+            from docling.datamodel import pipeline_options as docling_opts
+
+            kind_map = {
+                "auto": docling_opts.OcrAutoOptions,
+                "rapidocr": docling_opts.RapidOcrOptions,
+                "easyocr": docling_opts.EasyOcrOptions,
+                "tesseract": docling_opts.TesseractOcrOptions,
+                "tesseract_cli": docling_opts.TesseractCliOcrOptions,
+                "mac": docling_opts.OcrMacOptions,
+            }
+            cls = kind_map.get(kind, docling_opts.OcrAutoOptions)
+            if cls is docling_opts.OcrAutoOptions and "lang" not in normalized:
                 normalized["lang"] = []
-            pipeline_options = {**pipeline_options, "ocr_options": normalized}
+            allowed = set(getattr(cls, "model_fields", {}).keys())
+            payload = {key: value for key, value in normalized.items() if key in allowed}
+            pipeline_options = {**pipeline_options, "ocr_options": cls(**payload)}
     if not pipeline_options:
         return None
     from docling.datamodel.pipeline_options import PdfPipelineOptions
