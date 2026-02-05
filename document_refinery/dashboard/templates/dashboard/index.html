@@ -333,6 +333,34 @@
       statusLine.className = isError ? "error" : "muted";
     }
 
+    async function copyToClipboard(text) {
+      if (!text) return false;
+      if (navigator?.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (err) {
+          // fall back to execCommand
+        }
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "absolute";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (err) {
+        ok = false;
+      } finally {
+        textarea.remove();
+      }
+      return ok;
+    }
+
     function loadSavedKey() {
       const saved = localStorage.getItem("docrefinery_api_key");
       if (saved) {
@@ -491,6 +519,18 @@
         }
 
         if (item.error_message) {
+          const detailActions = document.createElement("div");
+          detailActions.className = "row";
+          const copyBtn = document.createElement("button");
+          copyBtn.className = "ghost";
+          copyBtn.type = "button";
+          copyBtn.textContent = "Copy error";
+          copyBtn.addEventListener("click", async () => {
+            const ok = await copyToClipboard(item.error_message);
+            setStatus(ok ? "Error copied to clipboard." : "Copy failed.", !ok);
+          });
+          detailActions.appendChild(copyBtn);
+          body.appendChild(detailActions);
           const msg = document.createElement("div");
           msg.className = "metrics";
           msg.textContent = item.error_message;
