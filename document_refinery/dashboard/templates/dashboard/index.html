@@ -396,14 +396,54 @@
         : "No active stages.";
 
       const failures = data.recent_failures || [];
-      fields.failures.innerHTML = failures.length
-        ? failures
-            .map(
-              (item) =>
-                `<div class="pill">Job ${item.id} · ${item.error_code || "UNKNOWN"}</div>`
-            )
-            .join("")
-        : "No recent failures.";
+      clearNode(fields.failures);
+      if (!failures.length) {
+        fields.failures.textContent = "No recent failures.";
+        return;
+      }
+      failures.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.appendChild(
+          createPill(`Job ${item.id} · ${item.error_code || "UNKNOWN"}`)
+        );
+        const actions = document.createElement("div");
+        actions.className = "row";
+
+        const jobLike = {
+          id: item.id,
+          status: item.status,
+          attempt: item.attempt,
+          max_retries: item.max_retries,
+        };
+        if (canRetryJob(jobLike)) {
+          const retry = document.createElement("button");
+          retry.className = "secondary";
+          retry.type = "button";
+          retry.textContent = "Retry";
+          retry.addEventListener("click", async () => {
+            const updated = await retryJob(item.id);
+            if (updated) {
+              await fetchJob(updated.id, false);
+              await refresh();
+            }
+          });
+          actions.appendChild(retry);
+        }
+
+        if (item.comparison_id) {
+          const restart = document.createElement("button");
+          restart.className = "ghost";
+          restart.type = "button";
+          restart.textContent = "Restart comparison";
+          restart.addEventListener("click", async () => {
+            await restartComparison(item);
+          });
+          actions.appendChild(restart);
+        }
+        row.appendChild(actions);
+        fields.failures.appendChild(row);
+      });
     }
 
     function renderWorkers(data) {
@@ -897,6 +937,44 @@
       } catch (err) {
         setStatus("Retry failed.", true);
         return null;
+      }
+    }
+
+    async function restartComparison(item) {
+      const comparisonId = item.comparison_id;
+      const documentId = item.document_id;
+      if (!comparisonId || !documentId) {
+        setStatus("Comparison restart needs a comparison id and document id.", true);
+        return;
+      }
+      try {
+        const jobs = await fetchJson(`/v1/jobs/?comparison_id=${comparisonId}`);
+        const profiles = Array.from(
+          new Set((jobs || []).map((job) => job.profile).filter(Boolean))
+        );
+        if (!profiles.length) {
+          setStatus("No profiles found for this comparison.", true);
+          return;
+        }
+        compareResult.textContent = "Restarting comparison...";
+        const res = await fetchAuthorized(`/v1/documents/${documentId}/compare/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profiles }),
+        });
+        if (!res.ok) {
+          setStatus(`Comparison restart failed (${res.status})`, true);
+          compareResult.textContent = "Comparison restart failed.";
+          return;
+        }
+        const data = await res.json();
+        compareDocumentId.value = documentId;
+        compareIdInput.value = data.comparison_id || "";
+        setStatus("Comparison restarted. Jobs queued.");
+        await fetchComparison(data.comparison_id);
+      } catch (err) {
+        setStatus("Comparison restart failed.", true);
+        compareResult.textContent = "Comparison restart failed.";
       }
     }
 

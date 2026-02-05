@@ -69,7 +69,17 @@ class DashboardSummaryView(APIView):
         recent_failures = list(
             jobs.filter(status__in=[IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED])
             .order_by("-finished_at")[:10]
-            .values("id", "document_id", "error_code", "finished_at")
+            .values(
+                "id",
+                "document_id",
+                "comparison_id",
+                "profile",
+                "status",
+                "error_code",
+                "attempt",
+                "max_retries",
+                "finished_at",
+            )
         )
 
         payload = {
