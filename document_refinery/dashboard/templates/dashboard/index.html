@@ -99,6 +99,26 @@
           <label for="uploadOptionsJson">Docling options JSON (optional)</label>
           <textarea id="uploadOptionsJson" placeholder='{"max_num_pages": 50, "exports": ["markdown","text"]}'></textarea>
         </div>
+        <div class="field">
+          <label>Testset after upload</label>
+          <div class="list">
+            <label class="pill">
+              <input type="checkbox" id="uploadCompare" />
+              Create comparison across profiles
+            </label>
+            <div class="muted">If no profile is selected, all profiles are used.</div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" name="uploadCompareProfiles" value="fast_text" /> fast_text</label>
+              <label class="pill"><input type="checkbox" name="uploadCompareProfiles" value="ocr_only" /> ocr_only</label>
+              <label class="pill"><input type="checkbox" name="uploadCompareProfiles" value="structured" /> structured</label>
+              <label class="pill"><input type="checkbox" name="uploadCompareProfiles" value="full_vlm" /> full_vlm</label>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="uploadCompareOptionsJson">Testset options JSON (optional)</label>
+          <textarea id="uploadCompareOptionsJson" placeholder='{"max_num_pages": 50}'></textarea>
+        </div>
         <div class="row">
           <label class="pill">
             <input type="checkbox" id="uploadIngest" checked />
@@ -253,6 +273,8 @@
     const uploadExternalUuid = document.getElementById("uploadExternalUuid");
     const uploadProfile = document.getElementById("uploadProfile");
     const uploadOptionsJson = document.getElementById("uploadOptionsJson");
+    const uploadCompare = document.getElementById("uploadCompare");
+    const uploadCompareOptionsJson = document.getElementById("uploadCompareOptionsJson");
     const uploadIngest = document.getElementById("uploadIngest");
     const uploadBtn = document.getElementById("uploadBtn");
     const clearUploadBtn = document.getElementById("clearUploadBtn");
@@ -285,6 +307,7 @@
     const comparisonStats = new Map();
     const comparisonTextCache = new Map();
     let lastDiffPayload = null;
+    const ALL_PROFILES = ["fast_text", "ocr_only", "structured", "full_vlm"];
 
     const fields = {
       queued: document.getElementById("statQueued"),
@@ -819,6 +842,12 @@
       );
     }
 
+    function selectedUploadCompareProfiles() {
+      return Array.from(
+        document.querySelectorAll("input[name='uploadCompareProfiles']:checked")
+      ).map((item) => item.value);
+    }
+
     function isErrorJob(job) {
       return ["FAILED", "QUARANTINED"].includes(job.status) || !!job.error_code;
     }
@@ -1099,6 +1128,36 @@
           jobIdInput.value = payload.job_id;
           await fetchJob(payload.job_id);
         }
+        compareDocumentId.value = payload.id || "";
+        if (uploadCompare.checked && payload.id) {
+          const selectedProfiles = selectedUploadCompareProfiles();
+          const profiles = selectedProfiles.length ? selectedProfiles : ALL_PROFILES.slice();
+          const comparePayload = { profiles };
+          const compareOptionsRaw = uploadCompareOptionsJson.value.trim();
+          if (compareOptionsRaw) {
+            try {
+              comparePayload.options_json = JSON.parse(compareOptionsRaw);
+            } catch (err) {
+              setStatus("Testset options JSON is invalid.", true);
+              return;
+            }
+          }
+          compareResult.textContent = "Creating testset...";
+          const compareRes = await fetchAuthorized(`/v1/documents/${payload.id}/compare/`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(comparePayload),
+          });
+          if (!compareRes.ok) {
+            setStatus(`Testset creation failed (${compareRes.status})`, true);
+            compareResult.textContent = "Testset creation failed.";
+            return;
+          }
+          const compareData = await compareRes.json();
+          compareIdInput.value = compareData.comparison_id || "";
+          setStatus("Testset created. Comparison jobs queued.");
+          await fetchComparison(compareData.comparison_id);
+        }
       } catch (err) {
         setStatus("Upload failed.", true);
         uploadResult.textContent = "Upload failed.";
@@ -1127,6 +1186,13 @@
       uploadExternalUuid.value = "";
       uploadProfile.value = "";
       uploadOptionsJson.value = "";
+      uploadCompare.checked = false;
+      uploadCompareOptionsJson.value = "";
+      document
+        .querySelectorAll("input[name='uploadCompareProfiles']:checked")
+        .forEach((item) => {
+          item.checked = false;
+        });
       uploadIngest.checked = true;
       uploadResult.textContent = "No upload yet.";
     }

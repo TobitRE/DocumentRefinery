@@ -42,6 +42,26 @@
         <label for="scopes">Scopes (comma-separated)</label>
         <input type="text" name="scopes" id="scopes" placeholder="documents:read, documents:write" />
       </div>
+      <div class="panel">
+        <div class="muted">Quick scopes</div>
+        <div class="row">
+          <button type="button" class="ghost" data-scope-mode="replace" data-scopes="dashboard:read,jobs:read,artifacts:read">Set dashboard viewer</button>
+          <span class="muted">Dashboard metrics + jobs + artifacts for comparisons.</span>
+        </div>
+        <div class="row">
+          <button type="button" class="ghost" data-scopes="documents:read,documents:write">Add document ingest</button>
+          <span class="muted">Upload and list documents.</span>
+        </div>
+        <div class="row">
+          <button type="button" class="ghost" data-scopes="webhooks:read,webhooks:write">Add webhooks admin</button>
+          <span class="muted">Manage webhook endpoints.</span>
+        </div>
+        <div class="row">
+          <button type="button" class="ghost" data-scope-mode="replace" data-scopes="documents:read,documents:write,artifacts:read,jobs:read,webhooks:read,webhooks:write,dashboard:read">Set full access</button>
+          <span class="muted">All API capabilities for this service.</span>
+        </div>
+        <div class="muted">Scopes control which API endpoints the key can call.</div>
+      </div>
       <div class="field">
         <label for="docling_options_json">Docling defaults (JSON, optional)</label>
         <textarea name="docling_options_json" id="docling_options_json" placeholder='{"max_num_pages": 50}'></textarea>
@@ -58,4 +78,26 @@
       </div>
     </form>
   </section>
+  <script>
+    const scopesInput = document.getElementById("scopes");
+    document.querySelectorAll("[data-scopes]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.scopeMode || "add";
+        const incoming = btn.dataset.scopes
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        if (mode === "replace") {
+          scopesInput.value = incoming.join(", ");
+          return;
+        }
+        const existing = scopesInput.value
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const merged = Array.from(new Set([...existing, ...incoming]));
+        scopesInput.value = merged.join(", ");
+      });
+    });
+  </script>
 {% endblock %}
