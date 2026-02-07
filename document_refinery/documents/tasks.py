@@ -462,7 +462,7 @@ def _isoformat(value):
 
 
 def _job_webhook_payload(job: IngestionJob, prev_status: str | None, prev_stage: str | None) -> dict:
-    return {
+    payload = {
         "event": "job.updated",
         "job_id": job.id,
         "job_uuid": str(job.uuid),
@@ -476,13 +476,15 @@ def _job_webhook_payload(job: IngestionJob, prev_status: str | None, prev_stage:
         "previous_stage": prev_stage,
         "error_code": job.error_code,
         "error_message": job.error_message,
-        "error_details": job.error_details_json,
         "queued_at": _isoformat(job.queued_at),
         "started_at": _isoformat(job.started_at),
         "finished_at": _isoformat(job.finished_at),
         "created_at": _isoformat(job.created_at),
         "modified_at": _isoformat(job.modified_at),
     }
+    if getattr(settings, "WEBHOOK_INCLUDE_ERROR_DETAILS", False):
+        payload["error_details"] = job.error_details_json
+    return payload
 
 
 def queue_job_webhooks(job: IngestionJob, prev_status: str | None, prev_stage: str | None) -> int:

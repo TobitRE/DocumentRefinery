@@ -1,5 +1,6 @@
-from rest_framework import serializers
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework import serializers
 
 from .models import Artifact, Document, IngestionJob, WebhookEndpoint
 from .profiles import PROFILE_NAMES
@@ -54,6 +55,8 @@ class ArtifactSerializer(serializers.ModelSerializer):
 
 
 class JobSerializer(serializers.ModelSerializer):
+    error_details_json = serializers.SerializerMethodField()
+
     class Meta:
         model = IngestionJob
         fields = (
@@ -79,6 +82,11 @@ class JobSerializer(serializers.ModelSerializer):
             "error_details_json",
             "created_at",
         )
+
+    def get_error_details_json(self, obj):
+        if getattr(settings, "API_INCLUDE_ERROR_DETAILS", False):
+            return obj.error_details_json
+        return None
 
 
 class WebhookEndpointSerializer(serializers.ModelSerializer):

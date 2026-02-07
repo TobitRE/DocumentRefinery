@@ -369,10 +369,7 @@
     }
 
     function loadSavedKey() {
-      const saved = localStorage.getItem("docrefinery_api_key");
-      if (saved) {
-        apiKeyInput.value = saved;
-      }
+      // API keys are intentionally not persisted in browser storage.
     }
 
     function getOpenFailureIds() {
@@ -394,8 +391,7 @@
     }
 
     function saveKey() {
-      localStorage.setItem("docrefinery_api_key", apiKeyInput.value.trim());
-      setStatus("API key saved.");
+      setStatus("API key ready for this session.");
     }
 
     async function fetchJson(path) {
@@ -440,14 +436,14 @@
 
       const stages = data.stages_running || {};
       const stageEntries = Object.entries(stages);
-      fields.stages.innerHTML = stageEntries.length
-        ? stageEntries
-            .map(
-              ([name, count]) =>
-                `<div class="pill">${name.toLowerCase()}: ${count}</div>`
-            )
-            .join("")
-        : "No active stages.";
+      clearNode(fields.stages);
+      if (stageEntries.length) {
+        stageEntries.forEach(([name, count]) => {
+          fields.stages.appendChild(createPill(`${String(name).toLowerCase()}: ${count}`));
+        });
+      } else {
+        fields.stages.textContent = "No active stages.";
+      }
 
       const failures = data.recent_failures || [];
       const openFailures = getOpenFailureIds();
@@ -623,14 +619,16 @@
 
     function renderWorkers(data) {
       const workers = data.workers || [];
-      fields.workers.innerHTML = workers.length
-        ? workers
-            .map(
-              (worker) =>
-                `<div class="pill">${worker.hostname} · ${worker.active_tasks} active</div>`
-            )
-            .join("")
-        : "No workers online.";
+      clearNode(fields.workers);
+      if (workers.length) {
+        workers.forEach((worker) => {
+          fields.workers.appendChild(
+            createPill(`${worker.hostname} · ${worker.active_tasks} active`)
+          );
+        });
+      } else {
+        fields.workers.textContent = "No workers online.";
+      }
     }
 
     function formatBytes(bytes) {
@@ -1006,56 +1004,67 @@
         : `gpu: ${gpu.reason || "unavailable"}`;
       const driverLine = gpu.driver_version ? `driver: ${gpu.driver_version}` : null;
 
-      fields.system.innerHTML = `
-        <div class="pill">db: ${data.checks?.db ? "ok" : "down"}</div>
-        <div class="pill">broker: ${data.checks?.broker ? "ok" : "down"}</div>
-        <div class="pill">cpu: ${cpu.count ?? "—"} cores · load ${load}</div>
-        <div class="pill">mem: ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${formatPercent(
-        mem.percent
-      )})</div>
-        <div class="pill">disk(/): ${formatBytes(
-          disk.root?.used
-        )} / ${formatBytes(disk.root?.total)} (${formatPercent(
-        disk.root?.percent
-      )})</div>
-        <div class="pill">disk(data): ${
-          disk.data_root
-            ? `${formatBytes(disk.data_root.used)} / ${formatBytes(
-                disk.data_root.total
-              )} (${formatPercent(disk.data_root.percent)})`
-            : "n/a"
-        }</div>
-        <div class="pill">uptime: ${formatUptime(data.uptime_seconds)}</div>
-        <div class="pill">${gpuLine}</div>
-        ${driverLine ? `<div class="pill">${driverLine}</div>` : ""}
-      `;
+      clearNode(fields.system);
+      fields.system.appendChild(createPill(`db: ${data.checks?.db ? "ok" : "down"}`));
+      fields.system.appendChild(createPill(`broker: ${data.checks?.broker ? "ok" : "down"}`));
+      fields.system.appendChild(createPill(`cpu: ${cpu.count ?? "—"} cores · load ${load}`));
+      fields.system.appendChild(
+        createPill(
+          `mem: ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${formatPercent(
+            mem.percent
+          )})`
+        )
+      );
+      fields.system.appendChild(
+        createPill(
+          `disk(/): ${formatBytes(disk.root?.used)} / ${formatBytes(
+            disk.root?.total
+          )} (${formatPercent(disk.root?.percent)})`
+        )
+      );
+      fields.system.appendChild(
+        createPill(
+          `disk(data): ${
+            disk.data_root
+              ? `${formatBytes(disk.data_root.used)} / ${formatBytes(
+                  disk.data_root.total
+                )} (${formatPercent(disk.data_root.percent)})`
+              : "n/a"
+          }`
+        )
+      );
+      fields.system.appendChild(createPill(`uptime: ${formatUptime(data.uptime_seconds)}`));
+      fields.system.appendChild(createPill(gpuLine));
+      if (driverLine) {
+        fields.system.appendChild(createPill(driverLine));
+      }
       fields.metrics.textContent = data.metrics?.text || "—";
     }
 
     function renderJobStatus(job) {
       if (!job) {
         jobStatusPanel.textContent = "No job loaded.";
-        jobActions.innerHTML = "";
+        clearNode(jobActions);
         return;
       }
       const status = job.status || "—";
       const stage = job.stage || "—";
       const error = job.error_code ? `${job.error_code}: ${job.error_message || ""}` : "—";
-      jobStatusPanel.innerHTML = `
-        <div class="list">
-          <div class="pill">Status: ${status}</div>
-          <div class="pill">Stage: ${stage}</div>
-          <div class="pill">External UUID: ${job.external_uuid || "—"}</div>
-          <div class="pill">Profile: ${job.profile || "—"}</div>
-          <div class="pill">Comparison: ${job.comparison_id || "—"}</div>
-          <div class="pill">Queued: ${job.queued_at || "—"}</div>
-          <div class="pill">Started: ${job.started_at || "—"}</div>
-          <div class="pill">Finished: ${job.finished_at || "—"}</div>
-          <div class="pill">Error: ${error}</div>
-          <div class="pill">Attempts: ${job.attempt ?? "—"} / ${job.max_retries ?? "—"}</div>
-        </div>
-      `;
-      jobActions.innerHTML = "";
+      clearNode(jobStatusPanel);
+      const list = document.createElement("div");
+      list.className = "list";
+      list.appendChild(createPill(`Status: ${status}`));
+      list.appendChild(createPill(`Stage: ${stage}`));
+      list.appendChild(createPill(`External UUID: ${job.external_uuid || "—"}`));
+      list.appendChild(createPill(`Profile: ${job.profile || "—"}`));
+      list.appendChild(createPill(`Comparison: ${job.comparison_id || "—"}`));
+      list.appendChild(createPill(`Queued: ${job.queued_at || "—"}`));
+      list.appendChild(createPill(`Started: ${job.started_at || "—"}`));
+      list.appendChild(createPill(`Finished: ${job.finished_at || "—"}`));
+      list.appendChild(createPill(`Error: ${error}`));
+      list.appendChild(createPill(`Attempts: ${job.attempt ?? "—"} / ${job.max_retries ?? "—"}`));
+      jobStatusPanel.appendChild(list);
+      clearNode(jobActions);
       if (canRetryJob(job)) {
         const retryBtn = document.createElement("button");
         retryBtn.className = "secondary";
@@ -1391,18 +1400,29 @@
         artifactPanel.textContent = "No artifacts.";
         return;
       }
-      artifactPanel.innerHTML = items
-        .map(
-          (item) => `
-            <div class="row" style="justify-content: space-between;">
-              <div class="mono">${item.kind} · ${item.size_bytes ?? "—"} bytes</div>
-              <button class="secondary" data-artifact="${item.id}" data-kind="${item.kind}">Download</button>
-            </div>
-          `
-        )
-        .join("");
-      artifactPanel.querySelectorAll("button[data-artifact]").forEach((btn) => {
-        btn.addEventListener("click", () => downloadArtifact(btn.dataset.artifact, btn.dataset.kind));
+      clearNode(artifactPanel);
+      items.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.justifyContent = "space-between";
+
+        const meta = document.createElement("div");
+        meta.className = "mono";
+        meta.textContent = `${item.kind} · ${item.size_bytes ?? "—"} bytes`;
+        row.appendChild(meta);
+
+        const button = document.createElement("button");
+        button.className = "secondary";
+        button.type = "button";
+        button.dataset.artifact = String(item.id);
+        button.dataset.kind = String(item.kind || "");
+        button.textContent = "Download";
+        button.addEventListener("click", () =>
+          downloadArtifact(button.dataset.artifact, button.dataset.kind)
+        );
+        row.appendChild(button);
+
+        artifactPanel.appendChild(row);
       });
     }
 
@@ -1512,7 +1532,7 @@
           return;
         }
         const payload = await res.json();
-        uploadResult.innerHTML = `Document ${payload.id} · SHA ${payload.sha256 || "—"} · Job ${payload.job_id || "—"}`;
+        uploadResult.textContent = `Document ${payload.id} · SHA ${payload.sha256 || "—"} · Job ${payload.job_id || "—"}`;
         if (payload.job_id) {
           jobIdInput.value = payload.job_id;
           await fetchJob(payload.job_id);

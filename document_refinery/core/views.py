@@ -1,10 +1,12 @@
-from django.http import JsonResponse, HttpResponse
-from django.conf import settings
-from django.utils import timezone
-from django.db import connections
-from django.db.utils import OperationalError
+import hmac
+
 from celery import current_app
+from django.conf import settings
+from django.db import connections
 from django.db.models import Count
+from django.db.utils import OperationalError
+from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 
 from documents.models import IngestionJob, IngestionJobStatus
 
@@ -14,7 +16,7 @@ def _require_internal_token(request):
     if not token:
         return JsonResponse({"status": "forbidden"}, status=403)
     provided = request.headers.get("X-Internal-Token")
-    if not provided or provided != token:
+    if not provided or not hmac.compare_digest(provided, token):
         return JsonResponse({"status": "forbidden"}, status=403)
     return None
 

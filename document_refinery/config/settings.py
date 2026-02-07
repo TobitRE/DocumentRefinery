@@ -67,6 +67,10 @@ INTERNAL_ENDPOINTS_TOKEN = os.environ.get("INTERNAL_ENDPOINTS_TOKEN", "")
 WEBHOOK_MAX_ATTEMPTS = int(os.environ.get("WEBHOOK_MAX_ATTEMPTS", "5"))
 WEBHOOK_INITIAL_BACKOFF_SECONDS = int(os.environ.get("WEBHOOK_INITIAL_BACKOFF_SECONDS", "30"))
 WEBHOOK_REQUEST_TIMEOUT = int(os.environ.get("WEBHOOK_REQUEST_TIMEOUT", "10"))
+WEBHOOK_INCLUDE_ERROR_DETAILS = (
+    os.environ.get("WEBHOOK_INCLUDE_ERROR_DETAILS", "false").lower() == "true"
+)
+API_INCLUDE_ERROR_DETAILS = os.environ.get("API_INCLUDE_ERROR_DETAILS", "false").lower() == "true"
 WEBHOOK_ALLOWED_HOSTS = [
     h.strip().lower()
     for h in os.environ.get("WEBHOOK_ALLOWED_HOSTS", "").split(",")
