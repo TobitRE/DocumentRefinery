@@ -153,6 +153,11 @@ class TestDashboardAPI(TestCase):
         self.assertEqual(payload["job_count"], 1)
         self.assertEqual(payload["total_duration_ms"], 300)
 
+    def test_usage_report_rejects_invalid_date_filters(self):
+        response = self.client.get("/v1/dashboard/reports/usage?from=not-a-date")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json().get("error_code"), "INVALID_DATE_FILTER")
+
 
 @override_settings(WEBHOOK_ALLOWED_HOSTS=["example.com"])
 class TestDashboardWebViews(TestCase):
@@ -204,17 +209,48 @@ class TestDashboardWebViews(TestCase):
 
         response = self.client.get("/dashboard/api-keys/new/")
         self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn(
+            'data-scopes="dashboard:read,jobs:read,jobs:write,artifacts:read"',
+            content,
+        )
+        self.assertIn(
+            'data-scopes="documents:read,documents:write,artifacts:read,jobs:read,jobs:write,webhooks:read,webhooks:write,dashboard:read"',
+            content,
+        )
+        self.assertIn('name="allowed_upload_mime_types"', content)
+        self.assertIn('value="application/pdf, application/x-pdf"', content)
 
         response = self.client.post(
             "/dashboard/api-keys/new/",
-            {"tenant": self.tenant.id, "name": "Secondary", "scopes": "documents:read"},
+            {
+                "tenant": self.tenant.id,
+                "name": "Secondary",
+                "scopes": "documents:read",
+                "allowed_upload_mime_types": "application/pdf, application/x-pdf",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(APIKey.objects.filter(name="Secondary").exists())
 
         api_key = APIKey.objects.filter(name="Secondary").first()
+        self.assertEqual(
+            api_key.allowed_upload_mime_types,
+            ["application/pdf", "application/x-pdf"],
+        )
         response = self.client.get(f"/dashboard/api-keys/{api_key.id}/")
         self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn(
+            'data-scopes="dashboard:read,jobs:read,jobs:write,artifacts:read"',
+            content,
+        )
+        self.assertIn(
+            'data-scopes="documents:read,documents:write,artifacts:read,jobs:read,jobs:write,webhooks:read,webhooks:write,dashboard:read"',
+            content,
+        )
+        self.assertIn('name="allowed_upload_mime_types"', content)
+        self.assertIn('value="application/pdf, application/x-pdf"', content)
 
         response = self.client.post(
             f"/dashboard/api-keys/{api_key.id}/",
@@ -345,3 +381,18 @@ class TestDashboardWebHelpers(TestCase):
             info = web_views._gpu_info()
         self.assertTrue(info["available"])
         self.assertEqual(info["gpus"][0]["name"], "Fake GPU")
+
+    def test_gpu_info_with_non_numeric_values(self):
+        fake_run = MagicMock()
+        fake_run.returncode = 0
+        fake_run.stdout = "Fake GPU, 10000, N/A, N/A\n"
+        with patch("dashboard.web_views.os.path.exists", return_value=True), patch(
+            "builtins.open", mock_open(read_data="Driver Version: 1.0\n")
+        ), patch("dashboard.web_views.shutil.which", return_value="nvidia-smi"), patch(
+            "dashboard.web_views.subprocess.run", return_value=fake_run
+        ):
+            info = web_views._gpu_info()
+        self.assertTrue(info["available"])
+        self.assertEqual(info["gpus"][0]["name"], "Fake GPU")
+        self.assertIsNone(info["gpus"][0]["memory_used_mb"])
+        self.assertIsNone(info["gpus"][0]["utilization_pct"])

@@ -19,6 +19,7 @@ from django.utils.decorators import method_decorator
 from django.views.generic import TemplateView
 
 from authn.models import APIKey, Tenant
+from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
 from documents.models import (
     IngestionJob,
     IngestionJobStatus,
@@ -55,6 +56,10 @@ def _parse_json(raw: str):
     if not raw:
         return None
     return json.loads(raw)
+
+
+def _default_allowed_upload_mime_types_text() -> str:
+    return ", ".join(DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
 
 
 def _read_meminfo() -> dict[str, int]:
@@ -107,6 +112,17 @@ def _safe_disk_usage(path: str):
 
 
 def _gpu_info() -> dict[str, object]:
+    def _to_int(value: str) -> int | None:
+        normalized = (value or "").strip()
+        if not normalized:
+            return None
+        if normalized.upper() in {"N/A", "[N/A]"}:
+            return None
+        try:
+            return int(normalized)
+        except ValueError:
+            return None
+
     info: dict[str, object] = {"available": False}
     driver_version = None
     if os.path.exists("/proc/driver/nvidia/version"):
@@ -148,9 +164,9 @@ def _gpu_info() -> dict[str, object]:
         gpus.append(
             {
                 "name": name,
-                "memory_total_mb": int(mem_total),
-                "memory_used_mb": int(mem_used),
-                "utilization_pct": int(util),
+                "memory_total_mb": _to_int(mem_total),
+                "memory_used_mb": _to_int(mem_used),
+                "utilization_pct": _to_int(util),
             }
         )
     info["available"] = bool(gpus)
@@ -274,6 +290,7 @@ def api_key_new(request):
     tenants = Tenant.objects.order_by("name")
     raw_key = None
     errors = None
+    allowed_upload_mime_types_text = _default_allowed_upload_mime_types_text()
 
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
@@ -281,6 +298,8 @@ def api_key_new(request):
         scopes = _parse_list(request.POST.get("scopes", ""))
         active = request.POST.get("active") == "on"
         options_raw = request.POST.get("docling_options_json", "")
+        allowed_upload_mime_types_text = (request.POST.get("allowed_upload_mime_types") or "").strip()
+        allowed_upload_mime_types = _parse_list(allowed_upload_mime_types_text)
 
         if not name or not tenant_id:
             errors = "Tenant and name are required."
@@ -297,6 +316,7 @@ def api_key_new(request):
                     scopes=scopes,
                     active=active,
                     docling_options_json=docling_options,
+                    allowed_upload_mime_types=allowed_upload_mime_types,
                 )
             except Tenant.DoesNotExist:
                 errors = "Selected tenant does not exist."
@@ -306,7 +326,13 @@ def api_key_new(request):
     return render(
         request,
         "dashboard/api_key_new.html",
-        {"tenants": tenants, "raw_key": raw_key, "errors": errors, "nav_active": "keys"},
+        {
+            "tenants": tenants,
+            "raw_key": raw_key,
+            "errors": errors,
+            "nav_active": "keys",
+            "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
+        },
     )
 
 
@@ -319,6 +345,9 @@ def api_key_detail(request, pk: int):
         json.dumps(key.docling_options_json, indent=2, sort_keys=True)
         if key.docling_options_json
         else ""
+    )
+    allowed_upload_mime_types_text = ", ".join(
+        key.allowed_upload_mime_types or DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
     )
 
     if request.method == "POST":
@@ -334,11 +363,16 @@ def api_key_detail(request, pk: int):
             scopes = _parse_list(request.POST.get("scopes", ""))
             active = request.POST.get("active") == "on"
             options_raw = request.POST.get("docling_options_json", "")
+            allowed_upload_mime_types_text = (
+                request.POST.get("allowed_upload_mime_types") or ""
+            ).strip()
+            allowed_upload_mime_types = _parse_list(allowed_upload_mime_types_text)
             try:
                 key.name = name or key.name
                 key.scopes = scopes
                 key.active = active
                 key.docling_options_json = _parse_json(options_raw)
+                key.allowed_upload_mime_types = allowed_upload_mime_types
                 key.save()
                 docling_options_text = (
                     json.dumps(key.docling_options_json, indent=2, sort_keys=True)
@@ -357,6 +391,7 @@ def api_key_detail(request, pk: int):
             "errors": errors,
             "nav_active": "keys",
             "docling_options_text": docling_options_text,
+            "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
         },
     )
 

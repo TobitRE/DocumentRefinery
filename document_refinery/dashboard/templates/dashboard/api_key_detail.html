@@ -63,11 +63,23 @@
         <label for="scopes">Scopes (comma-separated)</label>
         <input type="text" name="scopes" id="scopes" value="{{ key.scopes|join:", " }}" />
       </div>
+      <div class="field">
+        <label for="allowed_upload_mime_types">Allowed Upload File Types (MIME, comma-separated)</label>
+        <input
+          type="text"
+          name="allowed_upload_mime_types"
+          id="allowed_upload_mime_types"
+          value="{{ allowed_upload_mime_types_text }}"
+          placeholder="application/pdf, application/x-pdf"
+          required
+        />
+        <div class="muted">Restricts file types accepted at <span class="mono">/v1/documents/</span>.</div>
+      </div>
       <div class="panel">
         <div class="muted">Quick scopes</div>
         <div class="row">
-          <button type="button" class="ghost" data-scope-mode="replace" data-scopes="dashboard:read,jobs:read,artifacts:read">Set dashboard viewer</button>
-          <span class="muted">Dashboard metrics + jobs + artifacts for comparisons.</span>
+          <button type="button" class="ghost" data-scope-mode="replace" data-scopes="dashboard:read,jobs:read,jobs:write,artifacts:read">Set dashboard viewer</button>
+          <span class="muted">Dashboard metrics + jobs + artifacts with retry controls.</span>
         </div>
         <div class="row">
           <button type="button" class="ghost" data-scopes="documents:read,documents:write">Add document ingest</button>
@@ -78,7 +90,7 @@
           <span class="muted">Manage webhook endpoints.</span>
         </div>
         <div class="row">
-          <button type="button" class="ghost" data-scope-mode="replace" data-scopes="documents:read,documents:write,artifacts:read,jobs:read,webhooks:read,webhooks:write,dashboard:read">Set full access</button>
+          <button type="button" class="ghost" data-scope-mode="replace" data-scopes="documents:read,documents:write,artifacts:read,jobs:read,jobs:write,webhooks:read,webhooks:write,dashboard:read">Set full access</button>
           <span class="muted">All API capabilities for this service.</span>
         </div>
         <div class="muted">Scopes control which API endpoints the key can call.</div>

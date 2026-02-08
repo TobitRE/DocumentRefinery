@@ -72,6 +72,42 @@ class TestWebhookDelivery(TestCase):
         self.assertIsNotNone(delivery.delivered_at)
         self.assertIsNotNone(endpoint.last_success_at)
 
+    def test_deliver_success_ignores_endpoint_validation_errors_on_metadata_updates(self):
+        endpoint = WebhookEndpoint.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            name="Test",
+            url="https://example.com/webhook",
+            secret="",
+            events=["job.updated"],
+        )
+        delivery = WebhookDelivery.objects.create(
+            endpoint=endpoint,
+            event_type="job.updated",
+            payload_json={"event": "job.updated"},
+        )
+
+        class Response:
+            def getcode(self):
+                return 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("documents.tasks.urllib.request.urlopen", return_value=Response()), patch(
+            "documents.validators.validate_webhook_url",
+            side_effect=Exception("dns check failed"),
+        ):
+            result = deliver_webhook_delivery.apply(args=[delivery.id])
+
+        self.assertTrue(result.successful())
+        self.assertTrue(result.result)
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, WebhookDeliveryStatus.DELIVERED)
+
     @override_settings(WEBHOOK_MAX_ATTEMPTS=3, WEBHOOK_INITIAL_BACKOFF_SECONDS=1)
     def test_deliver_retry_on_failure(self):
         endpoint = WebhookEndpoint.objects.create(

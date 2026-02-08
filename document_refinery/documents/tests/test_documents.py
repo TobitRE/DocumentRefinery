@@ -63,6 +63,33 @@ class TestDocumentUpload(TestCase):
             response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 415)
 
+    def test_upload_respects_api_key_allowed_file_types(self):
+        api_key = APIKey.objects.get(tenant=self.tenant)
+        api_key.allowed_upload_mime_types = ["application/x-pdf"]
+        api_key.save()
+        content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
+            self.assertEqual(response.status_code, 415)
+            self.assertEqual(response.data["error_code"], "UNSUPPORTED_MEDIA_TYPE")
+            self.assertIn("application/x-pdf", response.data["message"])
+
+    def test_upload_accepts_allowed_pdf_alias(self):
+        api_key = APIKey.objects.get(tenant=self.tenant)
+        api_key.allowed_upload_mime_types = ["application/x-pdf"]
+        api_key.save()
+        content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
+        expected_hash = hashlib.sha256(content).hexdigest()
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/x-pdf")
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
+            self.assertEqual(response.status_code, 201)
+            doc = Document.objects.get(pk=response.data["id"])
+            self.assertEqual(doc.sha256, expected_hash)
+
     def test_upload_rejects_spoofed_pdf(self):
         content = b"not really a pdf"
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -161,6 +188,28 @@ class TestDocumentUpload(TestCase):
             self.assertIsNotNone(job)
             self.assertEqual(job.options_json.get("max_num_pages"), 12)
             self.assertEqual(job.options_json.get("exports"), ["text", "markdown", "doctags"])
+
+    def test_upload_ingest_queue_failure_rolls_back_state(self):
+        content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            with patch(
+                "documents.views.start_ingestion_pipeline",
+                side_effect=RuntimeError("broker down"),
+            ):
+                response = self.client.post(
+                    "/v1/documents/",
+                    {"file": upload, "ingest": "true"},
+                    format="multipart",
+                )
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.data["error_code"], "QUEUE_UNAVAILABLE")
+            self.assertEqual(Document.objects.count(), 0)
+            self.assertEqual(IngestionJob.objects.count(), 0)
+            upload_dir = os.path.join(tmpdir, "uploads", "quarantine", str(self.tenant.id))
+            if os.path.exists(upload_dir):
+                self.assertEqual(os.listdir(upload_dir), [])
 
     def test_upload_rejects_invalid_profile(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
@@ -299,3 +348,20 @@ class TestDocumentCompare(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["error_code"], "MISSING_SOURCE_FILE")
+
+    def test_compare_queue_failure_rolls_back_created_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document(tmpdir)
+            with patch(
+                "documents.views.start_ingestion_pipeline",
+                side_effect=RuntimeError("broker down"),
+            ):
+                response = self.client.post(
+                    f"/v1/documents/{doc.id}/compare/",
+                    {"profiles": ["fast_text", "structured"]},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.data["error_code"], "QUEUE_UNAVAILABLE")
+            self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 0)

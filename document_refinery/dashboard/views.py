@@ -3,7 +3,9 @@ import time
 
 from celery import current_app
 from django.db.models import Avg, Count, Sum
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -32,6 +34,27 @@ def _median(values: list[int]) -> int | None:
 
 _WORKER_CACHE: dict[str, object] = {"ts": 0, "payload": None}
 _WORKER_CACHE_TTL = 5
+
+
+def _parse_datetime_filter(value: str | None):
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+
+    parsed = parse_datetime(value)
+    if parsed is None:
+        date_value = parse_date(value)
+        if date_value is not None:
+            parsed = timezone.datetime.combine(date_value, timezone.datetime.min.time())
+    if parsed is None:
+        raise ValueError("invalid datetime filter")
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
 
 
 class DashboardSummaryView(APIView):
@@ -181,10 +204,22 @@ class UsageReportView(APIView):
 
         date_from = request.query_params.get("from")
         date_to = request.query_params.get("to")
-        if date_from:
-            jobs = jobs.filter(finished_at__gte=date_from)
-        if date_to:
-            jobs = jobs.filter(finished_at__lte=date_to)
+        try:
+            parsed_from = _parse_datetime_filter(date_from)
+            parsed_to = _parse_datetime_filter(date_to)
+        except ValueError:
+            return Response(
+                {
+                    "error_code": "INVALID_DATE_FILTER",
+                    "message": "Invalid date filter. Use ISO 8601 datetime values.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if parsed_from:
+            jobs = jobs.filter(finished_at__gte=parsed_from)
+        if parsed_to:
+            jobs = jobs.filter(finished_at__lte=parsed_to)
 
         aggregates = jobs.aggregate(
             total_duration_ms=Sum("duration_ms"),

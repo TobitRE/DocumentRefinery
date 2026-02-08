@@ -21,6 +21,16 @@ class TestJobCancelSemantics(TestCase):
             name="Primary",
             prefix=prefix,
             key_hash=key_hash,
+            scopes=["jobs:write"],
+            active=True,
+        )
+        raw_key_ro, prefix_ro, key_hash_ro = APIKey.generate_key()
+        self.raw_key_readonly = raw_key_ro
+        APIKey.objects.create(
+            tenant=self.tenant,
+            name="ReadOnly",
+            prefix=prefix_ro,
+            key_hash=key_hash_ro,
             scopes=["jobs:read"],
             active=True,
         )
@@ -115,6 +125,28 @@ class TestJobCancelSemantics(TestCase):
                 signal=ANY,
             )
 
+    def test_cancel_requires_write_scope(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="1" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/1/1.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=doc,
+            status=IngestionJobStatus.RUNNING,
+            stage=IngestionStage.CONVERTING,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key_readonly}")
+        response = self.client.post(f"/v1/jobs/{job.id}/cancel/")
+        self.assertEqual(response.status_code, 403)
+
 
 class TestJobRetryArtifacts(TestCase):
     def setUp(self):
@@ -127,6 +159,16 @@ class TestJobRetryArtifacts(TestCase):
             name="Primary",
             prefix=prefix,
             key_hash=key_hash,
+            scopes=["jobs:write"],
+            active=True,
+        )
+        raw_key_ro, prefix_ro, key_hash_ro = APIKey.generate_key()
+        self.raw_key_readonly = raw_key_ro
+        APIKey.objects.create(
+            tenant=self.tenant,
+            name="ReadOnly",
+            prefix=prefix_ro,
+            key_hash=key_hash_ro,
             scopes=["jobs:read"],
             active=True,
         )
@@ -164,3 +206,26 @@ class TestJobRetryArtifacts(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Artifact.objects.filter(job=job).count(), 0)
+
+    def test_retry_requires_write_scope(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="2" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/2/2.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=doc,
+            status=IngestionJobStatus.FAILED,
+            stage=IngestionStage.EXPORTING,
+        )
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key_readonly}")
+        with patch("documents.views.start_ingestion_pipeline"):
+            response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+        self.assertEqual(response.status_code, 403)

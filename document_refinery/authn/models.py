@@ -6,6 +6,7 @@ from django.conf import settings
 from django.db import models
 
 from core.models import BaseModel
+from .options import validate_allowed_upload_mime_types
 
 
 class Tenant(BaseModel):
@@ -16,6 +17,10 @@ class Tenant(BaseModel):
 
     def __str__(self) -> str:
         return self.name
+
+
+def _default_allowed_upload_mime_types():
+    return validate_allowed_upload_mime_types(None)
 
 
 class APIKey(BaseModel):
@@ -29,11 +34,18 @@ class APIKey(BaseModel):
     active = models.BooleanField(default=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     docling_options_json = models.JSONField(null=True, blank=True)
+    allowed_upload_mime_types = models.JSONField(
+        default=_default_allowed_upload_mime_types,
+        blank=True,
+    )
 
     def clean(self):
         from .options import validate_docling_options
 
         validate_docling_options(self.docling_options_json)
+        self.allowed_upload_mime_types = validate_allowed_upload_mime_types(
+            self.allowed_upload_mime_types
+        )
 
     def __str__(self) -> str:
         return f"{self.name} ({self.prefix})"

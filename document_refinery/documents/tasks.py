@@ -543,9 +543,10 @@ def deliver_webhook_delivery(self, delivery_id: int) -> bool:
         with urllib.request.urlopen(request, timeout=_webhook_request_timeout()) as response:
             code = response.getcode()
         if 200 <= code < 300:
+            now = timezone.now()
             delivery.status = WebhookDeliveryStatus.DELIVERED
             delivery.response_code = code
-            delivery.delivered_at = timezone.now()
+            delivery.delivered_at = now
             delivery.next_retry_at = None
             delivery.save(
                 update_fields=[
@@ -556,8 +557,10 @@ def deliver_webhook_delivery(self, delivery_id: int) -> bool:
                     "modified_at",
                 ]
             )
-            endpoint.last_success_at = timezone.now()
-            endpoint.save(update_fields=["last_success_at", "modified_at"])
+            WebhookEndpoint.objects.filter(pk=endpoint.pk).update(
+                last_success_at=now,
+                modified_at=now,
+            )
             return True
         raise urllib.error.HTTPError(
             endpoint.url, code, f"Unexpected status {code}", hdrs=None, fp=None
@@ -584,8 +587,11 @@ def deliver_webhook_delivery(self, delivery_id: int) -> bool:
                 "modified_at",
             ]
         )
-        endpoint.last_failure_at = timezone.now()
-        endpoint.save(update_fields=["last_failure_at", "modified_at"])
+        now = timezone.now()
+        WebhookEndpoint.objects.filter(pk=endpoint.pk).update(
+            last_failure_at=now,
+            modified_at=now,
+        )
         if delivery.status == WebhookDeliveryStatus.RETRYING:
             if not getattr(self.request, "called_directly", False) and not getattr(
                 self.request, "is_eager", False

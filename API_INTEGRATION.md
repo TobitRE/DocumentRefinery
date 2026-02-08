@@ -27,12 +27,19 @@ Authorization: Api-Key NFX_DOC_EX_API_KEY
 
 The API key must include the scopes required by each endpoint.
 
+Upload policy per API key:
+- Each API key has `allowed_upload_mime_types` (configured in the staff dashboard).
+- Default is `application/pdf, application/x-pdf`.
+- Uploads to `POST /v1/documents/` are rejected with `415 UNSUPPORTED_MEDIA_TYPE`
+  when the request `Content-Type` is not in this allowlist.
+
 ### Scopes
 
 - `documents:read` — list/retrieve documents
 - `documents:write` — upload documents
 - `artifacts:read` — list/download artifacts
 - `jobs:read` — list/retrieve jobs
+- `jobs:write` — cancel/retry jobs
 - `dashboard:read` — dashboard summary/workers endpoints
 - `webhooks:read` — list/retrieve webhook endpoints
 - `webhooks:write` — create/update/delete webhook endpoints
@@ -53,7 +60,9 @@ Multipart fields:
 - `external_uuid` (optional, UUID) — your correlation ID, echoed on documents and jobs
 
 Constraints:
-- Only PDF is accepted (`application/pdf` or `application/x-pdf`).
+- Request `Content-Type` must be allowed by the API key allowlist.
+- Default allowed types are `application/pdf` and `application/x-pdf`.
+- If type is PDF, content is also signature-checked (`%PDF-` header).
 - Max size is controlled by `UPLOAD_MAX_SIZE_MB` (default 50 MB).
 
 Docling options (current support):
@@ -278,6 +287,8 @@ Retry (only `FAILED`/`QUARANTINED`):
 POST /v1/jobs/{id}/retry/
 ```
 
+Requires scope: `jobs:write`.
+
 ## Dashboard API (optional)
 
 ```
@@ -319,7 +330,7 @@ timeout) and return progress in your UI.
 
 ## Common error codes
 
-- `UNSUPPORTED_MEDIA_TYPE` — non-PDF upload
+- `UNSUPPORTED_MEDIA_TYPE` — upload content type is not allowed by API key (or invalid PDF payload)
 - `FILE_TOO_LARGE` — file exceeds size limit
 - `DUPLICATE_DOCUMENT` — same document already uploaded for the tenant
 - `INVALID_OPTIONS` — Docling options JSON invalid
@@ -327,6 +338,7 @@ timeout) and return progress in your UI.
 ## Troubleshooting
 
 - `403` / `401`: check API key and scopes.
+- `415`: check the API key `allowed_upload_mime_types` and request `Content-Type`.
 - `404` for artifacts: ingestion not finished or artifact not produced.
 - Stuck jobs: check worker status via `/v1/dashboard/workers`.
 

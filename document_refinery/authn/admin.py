@@ -22,24 +22,18 @@ class APIKeyAdmin(admin.ModelAdmin):
     readonly_fields = ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")
     actions = ("deactivate_keys", "rotate_keys")
     fieldsets = (
-        (None, {"fields": ("tenant", "name", "active", "scopes")}),
+        (None, {"fields": ("tenant", "name", "active", "scopes", "allowed_upload_mime_types")}),
         ("Docling defaults", {"fields": ("docling_options_json",)}),
         ("Key data", {"fields": ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")}),
     )
 
     def save_model(self, request, obj, form, change):
+        raw_key = None
         if not change and not obj.key_hash:
             raw_key, prefix, key_hash = APIKey.generate_key()
             obj.prefix = prefix
             obj.key_hash = key_hash
-            obj.save()
-            self._raw_key = raw_key
-            return
         super().save_model(request, obj, form, change)
-
-    def response_add(self, request, obj, post_url_continue=None):
-        response = super().response_add(request, obj, post_url_continue=post_url_continue)
-        raw_key = getattr(self, "_raw_key", None)
         if raw_key:
             messages.warning(
                 request,
@@ -48,8 +42,6 @@ class APIKeyAdmin(admin.ModelAdmin):
                     f"{raw_key}"
                 ),
             )
-            delattr(self, "_raw_key")
-        return response
 
     @admin.action(description="Deactivate selected API keys")
     def deactivate_keys(self, request, queryset):

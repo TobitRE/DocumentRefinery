@@ -14,7 +14,7 @@ from celery import current_app
 
 from authn.permissions import HasScope
 from authn.permissions import APIKeyRequired
-from authn.options import validate_docling_options
+from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES, validate_docling_options
 
 from django.db import IntegrityError
 
@@ -45,6 +45,26 @@ def _looks_like_pdf(uploaded) -> bool:
     except Exception:
         return False
     return header == b"%PDF-"
+
+
+def _safe_remove_file(path: str) -> None:
+    if not path:
+        return
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def _queue_unavailable_response():
+    return Response(
+        {
+            "error_code": "QUEUE_UNAVAILABLE",
+            "message": "Ingestion queue is unavailable. Please retry later.",
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 
 class DocumentViewSet(
@@ -80,12 +100,28 @@ class DocumentViewSet(
         external_uuid = serializer.validated_data.get("external_uuid", None)
         profile = serializer.validated_data.get("profile", None)
 
-        if uploaded.content_type not in ("application/pdf", "application/x-pdf"):
+        content_type = (uploaded.content_type or "").strip().lower()
+        api_key = request.auth
+        allowed_upload_mime_types = [
+            str(item).strip().lower()
+            for item in (api_key.allowed_upload_mime_types or DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
+            if str(item).strip()
+        ]
+        if not allowed_upload_mime_types:
+            allowed_upload_mime_types = list(DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
+
+        if content_type not in allowed_upload_mime_types:
             return Response(
-                {"error_code": "UNSUPPORTED_MEDIA_TYPE", "message": "Only PDF files are allowed."},
+                {
+                    "error_code": "UNSUPPORTED_MEDIA_TYPE",
+                    "message": (
+                        "File type is not allowed for this API key. "
+                        f"Allowed types: {', '.join(allowed_upload_mime_types)}."
+                    ),
+                },
                 status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             )
-        if not _looks_like_pdf(uploaded):
+        if content_type in ("application/pdf", "application/x-pdf") and not _looks_like_pdf(uploaded):
             return Response(
                 {"error_code": "INVALID_PDF", "message": "File does not look like a PDF."},
                 status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -98,7 +134,6 @@ class DocumentViewSet(
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
 
-        api_key = request.auth
         tenant_id = api_key.tenant_id
         filename = uploaded.name
 
@@ -107,7 +142,7 @@ class DocumentViewSet(
             created_by_key=api_key,
             external_uuid=external_uuid,
             original_filename=filename,
-            mime_type=uploaded.content_type or "application/pdf",
+            mime_type=content_type or "application/pdf",
             size_bytes=0,
             storage_relpath_quarantine="",
         )
@@ -187,7 +222,13 @@ class DocumentViewSet(
                 options_json=options_json or {},
             )
             job_id = job.id
-            start_ingestion_pipeline(job_id)
+            try:
+                start_ingestion_pipeline(job_id)
+            except Exception:
+                IngestionJob.objects.filter(pk=job_id).delete()
+                _safe_remove_file(doc.get_quarantine_path())
+                doc.delete()
+                return _queue_unavailable_response()
 
         payload = DocumentSerializer(doc).data
         if job_id:
@@ -216,6 +257,7 @@ class DocumentViewSet(
 
         comparison_id = uuid.uuid4()
         jobs = []
+        created_jobs = []
         for profile in profiles:
             options_json = (
                 base_options
@@ -257,8 +299,23 @@ class DocumentViewSet(
                 queued_at=timezone.now(),
                 options_json=options_json or {},
             )
-            start_ingestion_pipeline(job.id)
-            jobs.append({"job_id": job.id, "profile": profile})
+            created_jobs.append(job)
+
+        queued_job_ids = set()
+        try:
+            for job in created_jobs:
+                start_ingestion_pipeline(job.id)
+                queued_job_ids.add(job.id)
+                jobs.append({"job_id": job.id, "profile": job.profile})
+        except Exception:
+            for job in created_jobs:
+                if job.id in queued_job_ids:
+                    continue
+                source_relpath = job.source_relpath
+                job.delete()
+                if source_relpath:
+                    _safe_remove_file(os.path.join(settings.DATA_ROOT, source_relpath))
+            return _queue_unavailable_response()
 
         return Response(
             {"comparison_id": str(comparison_id), "document_id": document.id, "jobs": jobs},
@@ -326,7 +383,10 @@ class JobViewSet(
     permission_classes = [APIKeyRequired, HasScope]
 
     def get_permissions(self):
-        self.required_scopes = ["jobs:read"]
+        if self.action in ("cancel", "retry"):
+            self.required_scopes = ["jobs:write"]
+        else:
+            self.required_scopes = ["jobs:read"]
         return super().get_permissions()
 
     def get_queryset(self):
