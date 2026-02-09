@@ -17,6 +17,9 @@ All API endpoints are under:
 https://docex.nfx-systems.com/v1/
 ```
 
+Use concrete endpoint paths under `/v1/` (for example `/v1/documents/`, `/v1/jobs/`).
+Do not use `/v1/` itself as an integration health/auth check.
+
 ## Authentication
 
 Use an API key in the `Authorization` header:
@@ -337,7 +340,8 @@ timeout) and return progress in your UI.
 
 ## Troubleshooting
 
-- `403` / `401`: check API key and scopes.
+- `401 Unauthorized`: API key authentication failed (missing/invalid header or key).
+- `403 Forbidden`: API key is valid, but required scope is missing for that endpoint.
 - `415`: check the API key `allowed_upload_mime_types` and request `Content-Type`.
 - `404` for artifacts: ingestion not finished or artifact not produced.
 - Stuck jobs: check worker status via `/v1/dashboard/workers`.
