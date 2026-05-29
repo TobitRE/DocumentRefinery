@@ -1,4 +1,5 @@
 import hmac
+from importlib.metadata import PackageNotFoundError, version
 
 from celery import current_app
 from django.conf import settings
@@ -32,10 +33,8 @@ def healthz(request):
         return guard
     docling_version = None
     try:
-        from docling import DoclingVersion
-
-        docling_version = DoclingVersion().docling_version
-    except Exception:
+        docling_version = version("docling")
+    except PackageNotFoundError:
         docling_version = None
     return JsonResponse(
         {

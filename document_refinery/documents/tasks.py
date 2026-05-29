@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from datetime import timedelta
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from celery import chain, shared_task
@@ -19,7 +20,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from clamav_client import clamd
-from docling.datamodel.document import DoclingDocument, DoclingVersion
+from docling.datamodel.document import DoclingDocument
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
 
@@ -38,6 +39,7 @@ from .models import (
 from .profiles import build_profile_pipeline_options
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
+DOCLING_UNLIMITED = 9223372036854775807
 
 
 def _webhook_max_attempts() -> int:
@@ -214,6 +216,51 @@ def _traceback_details(limit: int = 20000) -> dict:
     }
 
 
+def _package_version(package_name: str) -> str:
+    try:
+        return version(package_name)
+    except PackageNotFoundError:
+        return ""
+
+
+def _json_safe(value):
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(mode="json")
+        except TypeError:
+            return value.model_dump()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _docling_result_status(result) -> str:
+    status = getattr(result, "status", None)
+    if status is None:
+        return "success"
+    value = getattr(status, "value", status)
+    return str(value).lower()
+
+
+def _docling_result_details(result) -> dict:
+    return {
+        "docling_status": _docling_result_status(result),
+        "docling_errors": _json_safe(getattr(result, "errors", []) or []),
+    }
+
+
+def _docling_limit(value: int | None, fallback: int | None = None) -> int:
+    if value is not None:
+        return DOCLING_UNLIMITED if value == 0 else value
+    if fallback and fallback > 0:
+        return fallback
+    return DOCLING_UNLIMITED
+
+
 def _is_canceled(job: IngestionJob) -> bool:
     return job.status == IngestionJobStatus.CANCELED
 
@@ -310,14 +357,14 @@ def docling_convert_task(self, job_id: int) -> int:
     start = time.monotonic()
     document = job.document
 
-    max_pages = job.options_json.get("max_num_pages") if job.options_json else None
-    if not max_pages and settings.MAX_PAGES > 0:
-        max_pages = settings.MAX_PAGES
-    max_pages = max_pages or 9223372036854775807
+    max_pages_option = job.options_json.get("max_num_pages") if job.options_json else None
+    max_pages = _docling_limit(max_pages_option, settings.MAX_PAGES)
 
-    max_file_size = job.options_json.get("max_file_size") if job.options_json else None
-    if not max_file_size:
-        max_file_size = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
+    max_file_size_option = job.options_json.get("max_file_size") if job.options_json else None
+    max_file_size = _docling_limit(
+        max_file_size_option,
+        settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024,
+    )
 
     try:
         pipeline_options = build_profile_pipeline_options(job.profile)
@@ -334,18 +381,41 @@ def docling_convert_task(self, job_id: int) -> int:
             max_num_pages=max_pages,
             max_file_size=max_file_size,
         )
-        docling_doc = result.document
     except Exception as exc:
         _mark_failed(job, "DOCLING_CONVERT_FAILED", str(exc), _traceback_details())
         raise
 
-    relpath = _artifact_relpath(job, "docling.json")
-    payload = json.dumps(docling_doc.export_to_dict(), ensure_ascii=False, indent=2).encode(
-        "utf-8"
-    )
-    _write_artifact(job, ArtifactKind.DOCLING_JSON, relpath, payload, "application/json")
+    status = _docling_result_status(result)
+    if status != "success":
+        code = (
+            "DOCLING_PARTIAL_SUCCESS"
+            if status == "partial_success"
+            else "DOCLING_CONVERT_FAILED"
+        )
+        message = f"Docling conversion did not complete successfully: {status}"
+        _mark_failed(job, code, message, _docling_result_details(result))
+        raise RuntimeError(message)
 
-    job.docling_version = DoclingVersion().docling_version
+    try:
+        docling_doc = result.document
+        relpath = _artifact_relpath(job, "docling.json")
+        payload = json.dumps(
+            docling_doc.export_to_dict(),
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        _write_artifact(
+            job,
+            ArtifactKind.DOCLING_JSON,
+            relpath,
+            payload,
+            "application/json",
+        )
+    except Exception as exc:
+        _mark_failed(job, "DOCLING_CONVERT_FAILED", str(exc), _traceback_details())
+        raise
+
+    job.docling_version = _package_version("docling")
     job.convert_ms = int((time.monotonic() - start) * 1000)
     job.save()
     return job_id
@@ -381,56 +451,60 @@ def export_artifacts_task(self, job_id: int) -> int:
     if not exports:
         exports = ["markdown", "text", "doctags"]
 
-    if "markdown" in exports:
-        markdown = docling_doc.export_to_markdown()
-        _write_artifact(
-            job,
-            ArtifactKind.MARKDOWN,
-            _artifact_relpath(job, "document.md"),
-            markdown.encode("utf-8"),
-            "text/markdown",
-        )
-    if "text" in exports:
-        text = docling_doc.export_to_text()
-        _write_artifact(
-            job,
-            ArtifactKind.TEXT,
-            _artifact_relpath(job, "document.txt"),
-            text.encode("utf-8"),
-            "text/plain",
-        )
-    if "doctags" in exports:
-        doctags = docling_doc.export_to_doctags()
-        _write_artifact(
-            job,
-            ArtifactKind.DOCTAGS,
-            _artifact_relpath(job, "document.doctags"),
-            doctags.encode("utf-8"),
-            "text/plain",
-        )
-    if "chunks_json" in exports:
-        doctags = docling_doc.export_to_document_tokens()
-        payload = json.dumps(
-            {"format": "doctags", "content": doctags},
-            ensure_ascii=False,
-            indent=2,
-        ).encode("utf-8")
-        _write_artifact(
-            job,
-            ArtifactKind.CHUNKS_JSON,
-            _artifact_relpath(job, "chunks.json"),
-            payload,
-            "application/json",
-        )
-    if "figures_zip" in exports:
-        payload = _build_figures_zip(docling_doc)
-        _write_artifact(
-            job,
-            ArtifactKind.FIGURES_ZIP,
-            _artifact_relpath(job, "figures.zip"),
-            payload,
-            "application/zip",
-        )
+    try:
+        if "markdown" in exports:
+            markdown = docling_doc.export_to_markdown()
+            _write_artifact(
+                job,
+                ArtifactKind.MARKDOWN,
+                _artifact_relpath(job, "document.md"),
+                markdown.encode("utf-8"),
+                "text/markdown",
+            )
+        if "text" in exports:
+            text = docling_doc.export_to_text()
+            _write_artifact(
+                job,
+                ArtifactKind.TEXT,
+                _artifact_relpath(job, "document.txt"),
+                text.encode("utf-8"),
+                "text/plain",
+            )
+        if "doctags" in exports:
+            doctags = docling_doc.export_to_doctags()
+            _write_artifact(
+                job,
+                ArtifactKind.DOCTAGS,
+                _artifact_relpath(job, "document.doctags"),
+                doctags.encode("utf-8"),
+                "text/plain",
+            )
+        if "chunks_json" in exports:
+            doctags = docling_doc.export_to_doctags()
+            payload = json.dumps(
+                {"format": "doctags", "content": doctags},
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8")
+            _write_artifact(
+                job,
+                ArtifactKind.CHUNKS_JSON,
+                _artifact_relpath(job, "chunks.json"),
+                payload,
+                "application/json",
+            )
+        if "figures_zip" in exports:
+            payload = _build_figures_zip(docling_doc)
+            _write_artifact(
+                job,
+                ArtifactKind.FIGURES_ZIP,
+                _artifact_relpath(job, "figures.zip"),
+                payload,
+                "application/zip",
+            )
+    except Exception as exc:
+        _mark_failed(job, "DOCLING_EXPORT_FAILED", str(exc), _traceback_details())
+        raise
 
     job.export_ms = int((time.monotonic() - start) * 1000)
     job.save()

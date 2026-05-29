@@ -44,6 +44,12 @@ if not SECRET_KEY:
 ALLOWED_HOSTS = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
 
 DATA_ROOT = os.environ.get("DATA_ROOT", "/var/lib/docling_service")
+HF_HOME = os.environ.get("HF_HOME", str(Path(DATA_ROOT) / "hf_cache"))
+os.environ.setdefault("HF_HOME", HF_HOME)
+DOCLING_DEVICE = os.environ.get("DOCLING_DEVICE", "cpu")
+DOCLING_NUM_THREADS = int(os.environ.get("DOCLING_NUM_THREADS", "2"))
+os.environ.setdefault("DOCLING_DEVICE", DOCLING_DEVICE)
+os.environ.setdefault("DOCLING_NUM_THREADS", str(DOCLING_NUM_THREADS))
 UPLOAD_MAX_SIZE_MB = int(os.environ.get("UPLOAD_MAX_SIZE_MB", "50"))
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "0"))
 DOC_DEFAULT_OPTIONS = {}
@@ -63,6 +69,7 @@ X_ACCEL_REDIRECT_LOCATION = os.environ.get("X_ACCEL_REDIRECT_LOCATION", "/protec
 
 CELERY_CANCEL_SIGNAL = os.environ.get("CELERY_CANCEL_SIGNAL", "SIGTERM")
 CELERY_DEFAULT_QUEUE = os.environ.get("CELERY_DEFAULT_QUEUE", "default")
+CELERY_WORKER_CONCURRENCY = int(os.environ.get("CELERY_WORKER_CONCURRENCY", "1"))
 INTERNAL_ENDPOINTS_TOKEN = os.environ.get("INTERNAL_ENDPOINTS_TOKEN", "")
 WEBHOOK_MAX_ATTEMPTS = int(os.environ.get("WEBHOOK_MAX_ATTEMPTS", "5"))
 WEBHOOK_INITIAL_BACKOFF_SECONDS = int(os.environ.get("WEBHOOK_INITIAL_BACKOFF_SECONDS", "30"))

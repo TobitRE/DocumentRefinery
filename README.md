@@ -135,11 +135,15 @@ Expected configuration values:
 - `DJANGO_SETTINGS_MODULE`
 - `SECRET_KEY`
 - `DATA_ROOT`
+- `HF_HOME`
+- `DOCLING_DEVICE`
+- `DOCLING_NUM_THREADS`
 - `STATIC_ROOT`
 - `UPLOAD_MAX_SIZE_MB`
 - `MAX_PAGES`
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND` (optional)
+- `CELERY_WORKER_CONCURRENCY`
 - `ALLOWED_HOSTS`
 - `DATABASE_URL` (optional, defaults to SQLite)
 - `INTERNAL_ENDPOINTS_TOKEN` (required for health/ready/metrics)

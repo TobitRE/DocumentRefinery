@@ -6,8 +6,11 @@ After=network.target
 User=docling-svc
 Group=docling-svc
 WorkingDirectory=/var/www/document_refinery
+Environment=DOCLING_DEVICE=cpu
+Environment=DOCLING_NUM_THREADS=2
+Environment=CELERY_WORKER_CONCURRENCY=1
 EnvironmentFile=/var/www/document_refinery/.env
-ExecStart=/var/www/document_refinery/venv/bin/celery -A config worker --loglevel=INFO
+ExecStart=/var/www/document_refinery/venv/bin/celery -A config worker --loglevel=INFO --concurrency=${CELERY_WORKER_CONCURRENCY}
 Restart=on-failure
 KillSignal=SIGTERM
 

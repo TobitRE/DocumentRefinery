@@ -334,10 +334,14 @@ def main() -> None:
         print_step("Docling Smoke Test")
         if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=not resume):
             smoke_code = r'''
+import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+os.environ.setdefault("DOCLING_DEVICE", "cpu")
+os.environ.setdefault("DOCLING_NUM_THREADS", "2")
 
 from docling.document_converter import DocumentConverter
 
@@ -377,10 +381,14 @@ def build_pdf() -> bytes:
 pdf_bytes = build_pdf()
 
 with tempfile.TemporaryDirectory() as tmp:
+    os.environ.setdefault("HF_HOME", str(Path(tmp) / "hf_cache"))
     pdf_path = Path(tmp) / "test.pdf"
     pdf_path.write_bytes(pdf_bytes)
     converter = DocumentConverter()
-    result = converter.convert(str(pdf_path))
+    result = converter.convert(str(pdf_path), max_num_pages=1, max_file_size=2_000_000)
+    status = getattr(getattr(result, "status", None), "value", "success")
+    if status != "success":
+        raise RuntimeError(f"Docling conversion status: {status}")
     doc = result.document
     pages = len(doc.pages) if getattr(doc, "pages", None) is not None else 0
     print(f"Docling OK. Pages: {pages}")
@@ -517,8 +525,11 @@ except Exception as exc:
                 "ALLOWED_HOSTS": allowed_hosts,
                 "DATA_ROOT": data_root,
                 "HF_HOME": hf_home,
+                "DOCLING_DEVICE": "cpu",
+                "DOCLING_NUM_THREADS": "2",
                 "STATIC_ROOT": static_root,
                 "CELERY_BROKER_URL": broker_url,
+                "CELERY_WORKER_CONCURRENCY": "1",
                 "INTERNAL_ENDPOINTS_TOKEN": internal_token,
             }
             if clamav_socket:
@@ -644,7 +655,7 @@ ProtectKernelLogs=true
 RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
-ReadWritePaths={data_root} /run/document_refinery
+ReadWritePaths={data_root} {hf_home} /run/document_refinery
 Restart=on-failure
 KillSignal=SIGTERM
 
@@ -660,8 +671,11 @@ After=network.target
 User={service_user}
 Group={nginx_group}
 WorkingDirectory={project_dir}
+Environment=DOCLING_DEVICE=cpu
+Environment=DOCLING_NUM_THREADS=2
+Environment=CELERY_WORKER_CONCURRENCY=1
 EnvironmentFile={env_path}
-ExecStart={venv_bin}/celery -A config worker --loglevel=INFO
+ExecStart={venv_bin}/celery -A config worker --loglevel=INFO --concurrency=${{CELERY_WORKER_CONCURRENCY}}
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
@@ -673,7 +687,7 @@ ProtectKernelLogs=true
 RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
-ReadWritePaths={data_root}
+ReadWritePaths={data_root} {hf_home}
 Restart=on-failure
 KillSignal=SIGTERM
 

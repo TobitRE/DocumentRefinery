@@ -19,6 +19,54 @@ has_unit() {
   state=$(systemctl show -p LoadState --value "${unit}" 2>/dev/null || true)
   [ "${state}" = "loaded" ]
 }
+read_env_value() {
+  local key="$1"
+  if [ -f ".env" ]; then
+    grep "^${key}=" .env | tail -n 1 | cut -d '=' -f2- || true
+  fi
+  return 0
+}
+strip_env_quotes() {
+  local value="$1"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  printf '%s' "${value}"
+}
+normalize_path() {
+  "${PY_BIN}" -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
+}
+prepare_hf_home() {
+  local data_root="$1"
+  local hf_home="$2"
+  local service_user="$3"
+  local hf_home_default="${data_root}/hf_cache"
+  if [ -z "${hf_home}" ]; then
+    print_warning "HF_HOME not set; docling downloads may fail when ProtectHome=read-only. Add HF_HOME=${hf_home_default} to .env"
+    return 0
+  fi
+
+  local data_root_abs
+  local hf_home_abs
+  data_root_abs=$(normalize_path "${data_root}")
+  hf_home_abs=$(normalize_path "${hf_home}")
+
+  case "${hf_home_abs}" in
+    "${data_root_abs}/"*) ;;
+    *)
+      print_warning "Refusing to chown HF_HOME outside DATA_ROOT: ${hf_home_abs}. Expected path under ${data_root_abs}"
+      return 0
+      ;;
+  esac
+  if [ "${hf_home_abs}" = "/" ] || [ "${hf_home_abs}" = "${data_root_abs}" ]; then
+    print_warning "Refusing to chown unsafe HF_HOME path: ${hf_home_abs}"
+    return 0
+  fi
+
+  sudo mkdir -p "${hf_home_abs}" || print_warning "Failed to create HF_HOME at ${hf_home_abs}"
+  sudo chown -R "${service_user}:${service_user}" "${hf_home_abs}" || print_warning "Failed to set ownership on ${hf_home_abs}"
+}
 
 DO_BACKUP=1
 DO_BACKUP_DATA_ROOT=0
@@ -100,19 +148,42 @@ git pull origin "${BRANCH}"
 print_status "Installing/updating Python dependencies..."
 ${PIP_BIN} install -r requirements.txt
 
+print_status "Checking Python dependency consistency..."
+${PY_BIN} -m pip check || print_warning "pip check reported dependency issues"
+
+if [ -f "deploy/docling_runtime_check.py" ]; then
+  print_status "Running Docling runtime diagnostics..."
+  ${PY_BIN} deploy/docling_runtime_check.py || \
+    print_warning "Docling diagnostics reported issues; run '${PY_BIN} deploy/docling_runtime_check.py --smoke' for a conversion smoke test"
+fi
+
+print_status "Checking Docling cache configuration..."
+DATA_ROOT=""
+HF_HOME=""
+DATA_ROOT=$(read_env_value "DATA_ROOT")
+HF_HOME=$(read_env_value "HF_HOME")
+if [ -z "${DATA_ROOT}" ]; then
+  DATA_ROOT="/var/lib/docling_service"
+fi
+DATA_ROOT=$(strip_env_quotes "${DATA_ROOT}")
+HF_HOME=$(strip_env_quotes "${HF_HOME}")
+SERVICE_USER=""
+if has_unit "celery-worker.service"; then
+  SERVICE_USER=$(systemctl show -p User --value celery-worker.service 2>/dev/null || true)
+fi
+if [ -z "${SERVICE_USER}" ]; then
+  SERVICE_USER="$(whoami)"
+fi
+prepare_hf_home "${DATA_ROOT}" "${HF_HOME}" "${SERVICE_USER}"
+
 if [ "${DO_BACKUP}" -eq 1 ]; then
   print_status "Creating backup..."
   DATA_ROOT=""
-  if [ -f ".env" ]; then
-    DATA_ROOT=$(grep '^DATA_ROOT=' .env | cut -d '=' -f2-)
-    DATABASE_URL=$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)
-    HF_HOME=$(grep '^HF_HOME=' .env | cut -d '=' -f2-)
-  fi
+  DATA_ROOT=$(read_env_value "DATA_ROOT")
+  DATABASE_URL=$(read_env_value "DATABASE_URL")
+  HF_HOME=$(read_env_value "HF_HOME")
   if [ -n "${DATABASE_URL:-}" ]; then
-    DATABASE_URL="${DATABASE_URL%\"}"
-    DATABASE_URL="${DATABASE_URL#\"}"
-    DATABASE_URL="${DATABASE_URL%\'}"
-    DATABASE_URL="${DATABASE_URL#\'}"
+    DATABASE_URL=$(strip_env_quotes "${DATABASE_URL}")
   fi
   if [ -z "${DATA_ROOT}" ]; then
     DATA_ROOT="/var/lib/docling_service"
@@ -120,14 +191,8 @@ if [ "${DO_BACKUP}" -eq 1 ]; then
   if [ -z "${HF_HOME:-}" ]; then
     HF_HOME=""
   fi
-  DATA_ROOT="${DATA_ROOT%\"}"
-  DATA_ROOT="${DATA_ROOT#\"}"
-  DATA_ROOT="${DATA_ROOT%\'}"
-  DATA_ROOT="${DATA_ROOT#\'}"
-  HF_HOME="${HF_HOME%\"}"
-  HF_HOME="${HF_HOME#\"}"
-  HF_HOME="${HF_HOME%\'}"
-  HF_HOME="${HF_HOME#\'}"
+  DATA_ROOT=$(strip_env_quotes "${DATA_ROOT}")
+  HF_HOME=$(strip_env_quotes "${HF_HOME}")
   TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
   mkdir -p "${BACKUP_DIR}"
   if [ -f ".env" ]; then
@@ -209,17 +274,15 @@ fi
 print_status "Checking ClamAV access..."
 CLAMAV_SOCKET=""
 DATA_ROOT=""
-if [ -f ".env" ]; then
-  CLAMAV_SOCKET=$(grep '^CLAMAV_SOCKET=' .env | cut -d '=' -f2-)
-  DATA_ROOT=$(grep '^DATA_ROOT=' .env | cut -d '=' -f2-)
-fi
+HF_HOME=""
+CLAMAV_SOCKET=$(read_env_value "CLAMAV_SOCKET")
+DATA_ROOT=$(read_env_value "DATA_ROOT")
+HF_HOME=$(read_env_value "HF_HOME")
 if [ -z "${DATA_ROOT}" ]; then
   DATA_ROOT="/var/lib/docling_service"
 fi
-DATA_ROOT="${DATA_ROOT%\"}"
-DATA_ROOT="${DATA_ROOT#\"}"
-DATA_ROOT="${DATA_ROOT%\'}"
-DATA_ROOT="${DATA_ROOT#\'}"
+DATA_ROOT=$(strip_env_quotes "${DATA_ROOT}")
+HF_HOME=$(strip_env_quotes "${HF_HOME}")
 
 SERVICE_USER=""
 if has_unit "celery-worker.service"; then
@@ -229,13 +292,7 @@ if [ -z "${SERVICE_USER}" ]; then
   SERVICE_USER="$(whoami)"
 fi
 
-HF_HOME_DEFAULT="${DATA_ROOT}/hf_cache"
-if [ -z "${HF_HOME}" ]; then
-  print_warning "HF_HOME not set; docling downloads may fail when ProtectHome=read-only. Add HF_HOME=${HF_HOME_DEFAULT} to .env"
-else
-  sudo mkdir -p "${HF_HOME}" || print_warning "Failed to create HF_HOME at ${HF_HOME}"
-  sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${HF_HOME}" || print_warning "Failed to set ownership on ${HF_HOME}"
-fi
+prepare_hf_home "${DATA_ROOT}" "${HF_HOME}" "${SERVICE_USER}"
 
 if [ -n "${CLAMAV_SOCKET}" ]; then
   if [ -S "${CLAMAV_SOCKET}" ]; then
@@ -263,9 +320,7 @@ else
 fi
 
 print_status "Warming up..."
-if [ -f ".env" ]; then
-  INTERNAL_TOKEN=$(grep '^INTERNAL_ENDPOINTS_TOKEN=' .env | cut -d '=' -f2-)
-fi
+INTERNAL_TOKEN=$(read_env_value "INTERNAL_ENDPOINTS_TOKEN")
 if [ -n "${INTERNAL_TOKEN:-}" ]; then
   curl -s -H "X-Internal-Token: ${INTERNAL_TOKEN}" http://localhost/healthz >/dev/null || \
     print_warning "Warm-up failed"

@@ -10,7 +10,13 @@ from django.utils import timezone
 
 from authn.models import APIKey, Tenant
 from documents.models import Artifact, ArtifactKind, Document, IngestionJob, IngestionJobStatus, IngestionStage
-from documents.tasks import docling_convert_task, export_artifacts_task, scan_pdf_task
+from documents.profiles import PROFILE_NAMES, build_profile_pipeline_options
+from documents.tasks import (
+    DOCLING_UNLIMITED,
+    docling_convert_task,
+    export_artifacts_task,
+    scan_pdf_task,
+)
 from docling.datamodel.base_models import InputFormat
 
 
@@ -166,6 +172,67 @@ class TestPipelineTasks(TestCase):
             self.assertFalse(pipeline_options.do_ocr)
             self.assertFalse(pipeline_options.do_table_structure)
 
+    def test_convert_handles_partial_success_as_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+                    self.status = "partial_success"
+                    self.errors = [{"message": "page failed"}]
+
+            from docling.datamodel.document import DoclingDocument
+
+            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
+                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+                with self.assertRaises(RuntimeError):
+                    docling_convert_task(job.id)
+
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.FAILED)
+            self.assertEqual(job.error_code, "DOCLING_PARTIAL_SUCCESS")
+            self.assertEqual(job.error_details_json["docling_status"], "partial_success")
+
+    def test_convert_passes_zero_limits_as_docling_unlimited(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+            job.options_json = {"max_num_pages": 0, "max_file_size": 0}
+            job.save(update_fields=["options_json"])
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling.datamodel.document import DoclingDocument
+
+            captured = {}
+
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    captured["kwargs"] = kwargs
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with patch("documents.tasks.DocumentConverter", return_value=DummyConverter()):
+                docling_convert_task(job.id)
+
+            self.assertEqual(captured["kwargs"]["max_num_pages"], DOCLING_UNLIMITED)
+            self.assertEqual(captured["kwargs"]["max_file_size"], DOCLING_UNLIMITED)
+
     def test_export_artifacts_writes_chunks_and_figures(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
@@ -226,6 +293,45 @@ class TestPipelineTasks(TestCase):
             with zipfile.ZipFile(figures_path, "r") as archive:
                 names = archive.namelist()
             self.assertEqual(len(names), 1)
+
+    def test_export_artifacts_failure_marks_job_failed(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+            job.options_json = {"exports": ["markdown"]}
+            job.save(update_fields=["options_json"])
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling.datamodel.document import DoclingDocument
+
+            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
+                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+                docling_convert_task(job.id)
+
+            with patch(
+                "documents.tasks.DoclingDocument.export_to_markdown",
+                side_effect=RuntimeError("markdown failed"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    export_artifacts_task(job.id)
+
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.FAILED)
+            self.assertEqual(job.error_code, "DOCLING_EXPORT_FAILED")
+
+    def test_all_profiles_build_docling_pipeline_options(self):
+        for profile in PROFILE_NAMES:
+            with self.subTest(profile=profile):
+                self.assertIsNotNone(build_profile_pipeline_options(profile))
 
 
 class TestCleanupTasks(TestCase):
