@@ -5,7 +5,14 @@
 {% block content %}
   <section class="card">
     <h3>Create webhook endpoint</h3>
-    <div class="muted">Set up delivery targets for job updates.</div>
+    <div class="muted">Set up delivery targets for job updates. Tenants need an active API key before a webhook can be attached.</div>
+  </section>
+
+  <section class="card">
+    <div class="panel">
+      Choose a tenant with an active API key. If the tenant is missing one, create it first on
+      <a href="/dashboard/api-keys/">API keys</a>.
+    </div>
   </section>
 
   {% if errors %}
@@ -22,7 +29,9 @@
         <label for="tenant">Tenant</label>
         <select name="tenant" id="tenant" required>
           {% for tenant in tenants %}
-            <option value="{{ tenant.id }}">{{ tenant.name }}</option>
+            <option value="{{ tenant.id }}" {% if not tenant.has_active_key %}disabled{% endif %}>
+              {{ tenant.name }}{% if not tenant.has_active_key %} — requires active API key{% endif %}
+            </option>
           {% endfor %}
         </select>
       </div>
@@ -39,8 +48,20 @@
         <input type="text" name="secret" id="secret" />
       </div>
       <div class="field">
-        <label for="events">Events (comma-separated)</label>
-        <input type="text" name="events" id="events" value="job.updated" />
+        <label>Events</label>
+        <div class="checkbox-grid">
+          {% for option in event_options %}
+            <div class="option-card">
+              <label>
+                <input type="checkbox" name="events" value="{{ option.value }}" {% if option.value in selected_events %}checked{% endif %} />
+                <span>
+                  <strong>{{ option.label }}</strong><br />
+                  <span class="muted">{{ option.description }}</span>
+                </span>
+              </label>
+            </div>
+          {% endfor %}
+        </div>
       </div>
       <div class="row">
         <label class="pill">

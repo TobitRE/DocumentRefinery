@@ -2,6 +2,7 @@ from django.urls import path
 
 from .web_views import (
     DashboardPageView,
+    DashboardToolsPageView,
     api_key_detail,
     api_key_new,
     api_keys_list,
@@ -16,6 +17,7 @@ from .web_views import (
 
 urlpatterns = [
     path("", DashboardPageView.as_view(), name="dashboard-ui"),
+    path("tools/", DashboardToolsPageView.as_view(), name="dashboard-tools"),
     path("system", system_status, name="dashboard-system"),
     path("api-keys/", api_keys_list, name="dashboard-api-keys"),
     path("api-keys/new/", api_key_new, name="dashboard-api-keys-new"),

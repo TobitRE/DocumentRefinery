@@ -31,22 +31,104 @@ from documents.validators import validate_webhook_url
 
 @method_decorator(staff_member_required, name="dispatch")
 class DashboardPageView(TemplateView):
+    template_name = "dashboard/operations.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nav_active"] = "operations"
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class DashboardToolsPageView(TemplateView):
     template_name = "dashboard/index.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["nav_active"] = "overview"
+        context["nav_active"] = "tools"
         return context
 
 
 _SYSTEM_CACHE: dict[str, object] = {"ts": 0, "payload": None}
 _SYSTEM_CACHE_TTL = 5
+_SCOPE_LIBRARY = [
+    ("dashboard:read", "Dashboard read", "Read dashboard summaries, worker state, and usage reports."),
+    ("documents:read", "Documents read", "List uploaded documents and inspect document metadata."),
+    ("documents:write", "Documents write", "Upload documents and start comparison runs."),
+    ("jobs:read", "Jobs read", "Inspect ingestion job state and comparison job history."),
+    ("jobs:write", "Jobs write", "Retry or cancel ingestion jobs."),
+    ("artifacts:read", "Artifacts read", "Download generated extraction outputs."),
+    ("webhooks:read", "Webhooks read", "Inspect webhook endpoints and delivery history."),
+    ("webhooks:write", "Webhooks write", "Create and update webhook endpoints."),
+]
+_WEBHOOK_EVENT_LIBRARY = [
+    ("job.updated", "job.updated", "Send an event whenever an ingestion job changes stage or status."),
+]
+
+
+def _scope_options(selected_scopes: list[str] | None = None) -> list[dict[str, str]]:
+    selected = set(selected_scopes or [])
+    options = [
+        {"value": value, "label": label, "description": description}
+        for value, label, description in _SCOPE_LIBRARY
+    ]
+    known = {value for value, _label, _description in _SCOPE_LIBRARY}
+    for value in sorted(selected - known):
+        options.append(
+            {
+                "value": value,
+                "label": value,
+                "description": "Existing custom scope kept for compatibility.",
+            }
+        )
+    return options
+
+
+def _webhook_event_options(selected_events: list[str] | None = None) -> list[dict[str, str]]:
+    selected = set(selected_events or [])
+    options = [
+        {"value": value, "label": label, "description": description}
+        for value, label, description in _WEBHOOK_EVENT_LIBRARY
+    ]
+    known = {value for value, _label, _description in _WEBHOOK_EVENT_LIBRARY}
+    for value in sorted(selected - known):
+        options.append(
+            {
+                "value": value,
+                "label": value,
+                "description": "Existing custom event kept for compatibility.",
+            }
+        )
+    return options
+
+
+def _webhook_tenant_choices() -> list[dict[str, object]]:
+    active_key_tenants = set(
+        APIKey.objects.filter(active=True).values_list("tenant_id", flat=True)
+    )
+    return [
+        {
+            "id": tenant.id,
+            "name": tenant.name,
+            "has_active_key": tenant.id in active_key_tenants,
+        }
+        for tenant in Tenant.objects.order_by("name")
+    ]
 
 
 def _parse_list(value: str) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_request_list(request, name: str) -> list[str]:
+    values = []
+    for item in request.POST.getlist(name):
+        values.extend(_parse_list(item))
+    if values:
+        return values
+    return _parse_list(request.POST.get(name, ""))
 
 
 def _parse_json(raw: str):
@@ -290,12 +372,15 @@ def api_key_new(request):
     tenants = Tenant.objects.order_by("name")
     raw_key = None
     errors = None
+    selected_scopes: list[str] = []
     allowed_upload_mime_types_text = _default_allowed_upload_mime_types_text()
 
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
         tenant_id = request.POST.get("tenant")
-        scopes = _parse_list(request.POST.get("scopes", ""))
+        selected_scopes = _parse_request_list(request, "scope_choices") or _parse_list(
+            request.POST.get("scopes", "")
+        )
         active = request.POST.get("active") == "on"
         options_raw = request.POST.get("docling_options_json", "")
         allowed_upload_mime_types_text = (request.POST.get("allowed_upload_mime_types") or "").strip()
@@ -313,7 +398,7 @@ def api_key_new(request):
                     name=name,
                     prefix=prefix,
                     key_hash=key_hash,
-                    scopes=scopes,
+                    scopes=selected_scopes,
                     active=active,
                     docling_options_json=docling_options,
                     allowed_upload_mime_types=allowed_upload_mime_types,
@@ -331,6 +416,8 @@ def api_key_new(request):
             "raw_key": raw_key,
             "errors": errors,
             "nav_active": "keys",
+            "scope_options": _scope_options(selected_scopes),
+            "selected_scopes": selected_scopes,
             "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
         },
     )
@@ -341,6 +428,7 @@ def api_key_detail(request, pk: int):
     key = get_object_or_404(APIKey, pk=pk)
     raw_key = None
     errors = None
+    selected_scopes = list(key.scopes or [])
     docling_options_text = (
         json.dumps(key.docling_options_json, indent=2, sort_keys=True)
         if key.docling_options_json
@@ -360,7 +448,9 @@ def api_key_detail(request, pk: int):
             key.save()
         else:
             name = (request.POST.get("name") or "").strip()
-            scopes = _parse_list(request.POST.get("scopes", ""))
+            selected_scopes = _parse_request_list(request, "scope_choices") or _parse_list(
+                request.POST.get("scopes", "")
+            )
             active = request.POST.get("active") == "on"
             options_raw = request.POST.get("docling_options_json", "")
             allowed_upload_mime_types_text = (
@@ -369,7 +459,7 @@ def api_key_detail(request, pk: int):
             allowed_upload_mime_types = _parse_list(allowed_upload_mime_types_text)
             try:
                 key.name = name or key.name
-                key.scopes = scopes
+                key.scopes = selected_scopes
                 key.active = active
                 key.docling_options_json = _parse_json(options_raw)
                 key.allowed_upload_mime_types = allowed_upload_mime_types
@@ -390,6 +480,8 @@ def api_key_detail(request, pk: int):
             "raw_key": raw_key,
             "errors": errors,
             "nav_active": "keys",
+            "scope_options": _scope_options(selected_scopes),
+            "selected_scopes": selected_scopes,
             "docling_options_text": docling_options_text,
             "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
         },
@@ -422,15 +514,16 @@ def webhooks_list(request):
 
 @staff_member_required
 def webhook_new(request):
-    tenants = Tenant.objects.order_by("name")
+    tenants = _webhook_tenant_choices()
     errors = None
+    selected_events = ["job.updated"]
 
     if request.method == "POST":
         tenant_id = request.POST.get("tenant")
         name = (request.POST.get("name") or "").strip()
         url = (request.POST.get("url") or "").strip()
         secret = (request.POST.get("secret") or "").strip()
-        events = _parse_list(request.POST.get("events", "")) or ["job.updated"]
+        selected_events = _parse_request_list(request, "events") or ["job.updated"]
         enabled = request.POST.get("enabled") == "on"
 
         if not tenant_id or not name or not url:
@@ -453,7 +546,7 @@ def webhook_new(request):
                         name=name,
                         url=url,
                         secret=secret,
-                        events=events,
+                        events=selected_events,
                         enabled=enabled,
                     )
                     return redirect("/dashboard/webhooks/")
@@ -465,7 +558,13 @@ def webhook_new(request):
     return render(
         request,
         "dashboard/webhook_new.html",
-        {"tenants": tenants, "errors": errors, "nav_active": "webhooks"},
+        {
+            "tenants": tenants,
+            "errors": errors,
+            "event_options": _webhook_event_options(selected_events),
+            "selected_events": selected_events,
+            "nav_active": "webhooks",
+        },
     )
 
 
@@ -473,12 +572,13 @@ def webhook_new(request):
 def webhook_detail(request, pk: int):
     endpoint = get_object_or_404(WebhookEndpoint, pk=pk)
     errors = None
+    selected_events = list(endpoint.events or ["job.updated"])
 
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
         url = (request.POST.get("url") or "").strip()
         secret = (request.POST.get("secret") or "").strip()
-        events = _parse_list(request.POST.get("events", "")) or ["job.updated"]
+        selected_events = _parse_request_list(request, "events") or ["job.updated"]
         enabled = request.POST.get("enabled") == "on"
 
         if not name or not url:
@@ -488,7 +588,7 @@ def webhook_detail(request, pk: int):
                 validate_webhook_url(url)
                 endpoint.name = name
                 endpoint.url = url
-                endpoint.events = events
+                endpoint.events = selected_events
                 endpoint.enabled = enabled
                 if secret:
                     endpoint.secret = secret
@@ -508,6 +608,8 @@ def webhook_detail(request, pk: int):
             "endpoint": endpoint,
             "deliveries": deliveries,
             "errors": errors,
+            "event_options": _webhook_event_options(selected_events),
+            "selected_events": selected_events,
             "nav_active": "webhooks",
         },
     )
@@ -516,17 +618,34 @@ def webhook_detail(request, pk: int):
 @staff_member_required
 def webhook_deliveries_list(request):
     deliveries = WebhookDelivery.objects.select_related("endpoint").order_by("-created_at")
-    endpoint_id = request.GET.get("endpoint")
-    status = request.GET.get("status")
-    if endpoint_id:
-        deliveries = deliveries.filter(endpoint_id=endpoint_id)
-    if status:
+    endpoints = WebhookEndpoint.objects.order_by("name")
+    endpoint_param = (request.GET.get("endpoint") or "").strip()
+    selected_endpoint = ""
+    if endpoint_param:
+        try:
+            endpoint_id = int(endpoint_param)
+        except ValueError:
+            endpoint_id = None
+        if endpoint_id and endpoints.filter(pk=endpoint_id).exists():
+            deliveries = deliveries.filter(endpoint_id=endpoint_id)
+            selected_endpoint = str(endpoint_id)
+    status = (request.GET.get("status") or "").strip()
+    selected_status = ""
+    if status in {value for value, _label in WebhookDeliveryStatus.choices}:
         deliveries = deliveries.filter(status=status)
+        selected_status = status
     deliveries = deliveries[:200]
     return render(
         request,
         "dashboard/webhook_deliveries.html",
-        {"deliveries": deliveries, "nav_active": "deliveries"},
+        {
+            "deliveries": deliveries,
+            "endpoints": endpoints,
+            "selected_endpoint": selected_endpoint,
+            "selected_status": selected_status,
+            "status_choices": WebhookDeliveryStatus.choices,
+            "nav_active": "deliveries",
+        },
     )
 
 

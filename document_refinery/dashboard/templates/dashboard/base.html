@@ -256,6 +256,10 @@
         flex-wrap: wrap;
       }
 
+      .actions a {
+        text-decoration: none;
+      }
+
       #apiKeyInput {
         padding: 12px 14px;
         border: 1px solid #d8cbbd;
@@ -320,6 +324,69 @@
         align-items: center;
       }
 
+      .page-intro {
+        display: grid;
+        gap: 8px;
+        max-width: 860px;
+      }
+
+      .page-intro h2 {
+        margin: 0;
+        font-size: clamp(24px, 3vw, 34px);
+        letter-spacing: -0.02em;
+      }
+
+      .checkbox-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .option-card {
+        display: grid;
+        gap: 6px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        border: 1px solid #eadfce;
+        background: #fff;
+      }
+
+      .option-card strong {
+        font-size: 14px;
+      }
+
+      .option-card label {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        cursor: pointer;
+      }
+
+      .option-card input[type="checkbox"] {
+        margin-top: 2px;
+      }
+
+      .cta-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .link-card {
+        display: grid;
+        gap: 6px;
+        padding: 18px;
+        border-radius: 18px;
+        border: 1px solid #eadfce;
+        background: linear-gradient(180deg, #fffaf4 0%, #fff1df 100%);
+        color: var(--ink);
+        text-decoration: none;
+      }
+
+      .link-card span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
       @media (max-width: 720px) {
         header {
           padding: 24px 24px 12px;
@@ -343,7 +410,8 @@
           <p>Staff dashboard — operational overview and controls.</p>
         </div>
         <nav class="nav">
-          <a href="/dashboard/" class="{% if nav_active == 'overview' %}active{% endif %}">Overview</a>
+          <a href="/dashboard/" class="{% if nav_active == 'operations' %}active{% endif %}">Operations</a>
+          <a href="/dashboard/tools/" class="{% if nav_active == 'tools' %}active{% endif %}">Tenant tools</a>
           <a href="/dashboard/api-keys/" class="{% if nav_active == 'keys' %}active{% endif %}">API keys</a>
           <a href="/dashboard/webhooks/" class="{% if nav_active == 'webhooks' %}active{% endif %}">Webhooks</a>
           <a href="/dashboard/webhook-deliveries/" class="{% if nav_active == 'deliveries' %}active{% endif %}">Webhook logs</a>

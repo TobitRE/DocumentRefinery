@@ -182,6 +182,18 @@ class TestDashboardWebViews(TestCase):
     def test_dashboard_overview_page(self):
         response = self.client.get("/dashboard/")
         self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Operations", content)
+
+        response = self.client.get("/dashboard/tools/")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Tenant Tools", content)
+        self.assertIn("Use key", content)
+        self.assertNotIn(">Save key<", content)
+        self.assertNotIn("sessionStorage", content)
+        self.assertIn("PARTIAL_QUEUE_FAILURE", content)
+        self.assertIn("failed_profiles", content)
 
     def test_system_status_payload(self):
         mock_broker = MagicMock()
@@ -220,6 +232,7 @@ class TestDashboardWebViews(TestCase):
         )
         self.assertIn('name="allowed_upload_mime_types"', content)
         self.assertIn('value="application/pdf, application/x-pdf"', content)
+        self.assertIn('name="scope_choices"', content)
 
         response = self.client.post(
             "/dashboard/api-keys/new/",
@@ -251,6 +264,7 @@ class TestDashboardWebViews(TestCase):
         )
         self.assertIn('name="allowed_upload_mime_types"', content)
         self.assertIn('value="application/pdf, application/x-pdf"', content)
+        self.assertIn('name="scope_choices"', content)
 
         response = self.client.post(
             f"/dashboard/api-keys/{api_key.id}/",
@@ -259,6 +273,7 @@ class TestDashboardWebViews(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_webhook_pages(self):
+        tenant_without_key = Tenant.objects.create(name="Empty", slug="empty")
         endpoint = WebhookEndpoint.objects.create(
             tenant=self.tenant,
             created_by_key=self.api_key,
@@ -280,24 +295,54 @@ class TestDashboardWebViews(TestCase):
 
         response = self.client.get("/dashboard/webhooks/new/")
         self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("requires active API key", content)
+        self.assertIn(f'value="{tenant_without_key.id}" disabled', content)
 
         response = self.client.post(
             "/dashboard/webhooks/new/",
-            {"tenant": self.tenant.id, "name": "Secondary", "url": "https://example.com/2"},
+            {
+                "tenant": self.tenant.id,
+                "name": "Secondary",
+                "url": "https://example.com/2",
+                "events": "job.updated,custom.event",
+            },
         )
         self.assertEqual(response.status_code, 302)
+        secondary = WebhookEndpoint.objects.get(name="Secondary")
+        self.assertEqual(secondary.events, ["job.updated", "custom.event"])
 
         response = self.client.get(f"/dashboard/webhooks/{endpoint.id}/")
         self.assertEqual(response.status_code, 200)
 
         response = self.client.post(
             f"/dashboard/webhooks/{endpoint.id}/",
-            {"name": "Primary", "url": "https://example.com/webhook", "events": "job.updated"},
+            {
+                "name": "Primary",
+                "url": "https://example.com/webhook",
+                "events": "job.updated,custom.event",
+            },
         )
         self.assertEqual(response.status_code, 200)
+        endpoint.refresh_from_db()
+        self.assertEqual(endpoint.events, ["job.updated", "custom.event"])
 
         response = self.client.get("/dashboard/webhook-deliveries/")
         self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Apply filters", content)
+
+        response = self.client.get(f"/dashboard/webhook-deliveries/?endpoint={endpoint.id}&status=PENDING")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn(endpoint.name, content)
+        self.assertIn("selected", content)
+
+        response = self.client.get("/dashboard/webhook-deliveries/?endpoint=abc&status=BOGUS")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Apply filters", content)
+        self.assertNotIn("BOGUS", content)
 
         response = self.client.get(f"/dashboard/webhook-deliveries/{delivery.id}/")
         self.assertEqual(response.status_code, 200)

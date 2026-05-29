@@ -59,8 +59,20 @@
         <input type="text" name="secret" id="secret" />
       </div>
       <div class="field">
-        <label for="events">Events (comma-separated)</label>
-        <input type="text" name="events" id="events" value="{{ endpoint.events|join:", " }}" />
+        <label>Events</label>
+        <div class="checkbox-grid">
+          {% for option in event_options %}
+            <div class="option-card">
+              <label>
+                <input type="checkbox" name="events" value="{{ option.value }}" {% if option.value in selected_events %}checked{% endif %} />
+                <span>
+                  <strong>{{ option.label }}</strong><br />
+                  <span class="muted">{{ option.description }}</span>
+                </span>
+              </label>
+            </div>
+          {% endfor %}
+        </div>
       </div>
       <div class="row">
         <label class="pill">

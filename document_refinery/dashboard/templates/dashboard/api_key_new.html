@@ -11,7 +11,10 @@
   {% if raw_key %}
     <section class="card">
       <h3>New key created</h3>
-      <div class="panel mono">{{ raw_key }}</div>
+      <div class="panel mono" id="rawKeyValue">{{ raw_key }}</div>
+      <div class="actions" style="margin-top: 12px;">
+        <button type="button" class="secondary" id="copyRawKeyBtn">Copy key</button>
+      </div>
       <div class="muted">Copy this key now. It will not be shown again.</div>
     </section>
   {% endif %}
@@ -39,8 +42,26 @@
         <input type="text" name="name" id="name" required />
       </div>
       <div class="field">
-        <label for="scopes">Scopes (comma-separated)</label>
-        <input type="text" name="scopes" id="scopes" placeholder="documents:read, documents:write" />
+        <label>Scopes</label>
+        <div class="checkbox-grid">
+          {% for option in scope_options %}
+            <div class="option-card">
+              <label>
+                <input
+                  type="checkbox"
+                  name="scope_choices"
+                  value="{{ option.value }}"
+                  data-scope-checkbox
+                  {% if option.value in selected_scopes %}checked{% endif %}
+                />
+                <span>
+                  <strong>{{ option.label }}</strong><br />
+                  <span class="muted">{{ option.description }}</span>
+                </span>
+              </label>
+            </div>
+          {% endfor %}
+        </div>
       </div>
       <div class="field">
         <label for="allowed_upload_mime_types">Allowed Upload File Types (MIME, comma-separated)</label>
@@ -74,10 +95,13 @@
         </div>
         <div class="muted">Scopes control which API endpoints the key can call.</div>
       </div>
-      <div class="field">
-        <label for="docling_options_json">Docling defaults (JSON, optional)</label>
+      <details class="collapse">
+        <summary>
+          <span class="pill">Advanced defaults</span>
+          <span class="muted">Optional Docling JSON applied when uploads omit options.</span>
+        </summary>
         <textarea name="docling_options_json" id="docling_options_json" placeholder='{"max_num_pages": 50}'></textarea>
-      </div>
+      </details>
       <div class="row">
         <label class="pill">
           <input type="checkbox" name="active" checked />
@@ -91,7 +115,36 @@
     </form>
   </section>
   <script>
-    const scopesInput = document.getElementById("scopes");
+    async function copyToClipboard(text) {
+      if (!text) return false;
+      if (navigator?.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (err) {
+          // fall back to execCommand
+        }
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "absolute";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (err) {
+        ok = false;
+      } finally {
+        textarea.remove();
+      }
+      return ok;
+    }
+
+    const scopeCheckboxes = Array.from(document.querySelectorAll("[data-scope-checkbox]"));
+    const scopeMap = new Map(scopeCheckboxes.map((item) => [item.value, item]));
     document.querySelectorAll("[data-scopes]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const mode = btn.dataset.scopeMode || "add";
@@ -100,16 +153,26 @@
           .map((value) => value.trim())
           .filter(Boolean);
         if (mode === "replace") {
-          scopesInput.value = incoming.join(", ");
+          scopeCheckboxes.forEach((item) => {
+            item.checked = incoming.includes(item.value);
+          });
           return;
         }
-        const existing = scopesInput.value
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean);
-        const merged = Array.from(new Set([...existing, ...incoming]));
-        scopesInput.value = merged.join(", ");
+        incoming.forEach((value) => {
+          if (scopeMap.has(value)) {
+            scopeMap.get(value).checked = true;
+          }
+        });
       });
     });
+
+    const copyRawKeyBtn = document.getElementById("copyRawKeyBtn");
+    if (copyRawKeyBtn) {
+      copyRawKeyBtn.addEventListener("click", async () => {
+        const text = document.getElementById("rawKeyValue")?.textContent?.trim() || "";
+        const ok = await copyToClipboard(text);
+        copyRawKeyBtn.textContent = ok ? "Copied" : "Copy failed";
+      });
+    }
   </script>
 {% endblock %}

@@ -6,6 +6,7 @@ from django.db import connections
 from django.db.models import Count
 from django.db.utils import OperationalError
 from django.http import HttpResponse, JsonResponse
+from django.shortcuts import render
 from django.utils import timezone
 
 from documents.models import IngestionJob, IngestionJobStatus
@@ -19,6 +20,10 @@ def _require_internal_token(request):
     if not provided or not hmac.compare_digest(provided, token):
         return JsonResponse({"status": "forbidden"}, status=403)
     return None
+
+
+def home(request):
+    return render(request, "core/home.html")
 
 
 def healthz(request):

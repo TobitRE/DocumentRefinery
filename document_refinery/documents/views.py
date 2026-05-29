@@ -67,6 +67,128 @@ def _queue_unavailable_response():
     )
 
 
+def _stash_job_artifacts_for_retry(job: IngestionJob) -> list[dict[str, object]]:
+    snapshots = []
+    artifacts = list(Artifact.objects.filter(job=job))
+    try:
+        for artifact in artifacts:
+            abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+            backup_path = ""
+            if os.path.exists(abs_path):
+                backup_path = f"{abs_path}.retry-backup-{uuid.uuid4().hex}"
+                os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+                os.replace(abs_path, backup_path)
+            snapshots.append(
+                {
+                    "id": artifact.id,
+                    "uuid": artifact.uuid,
+                    "created_at": artifact.created_at,
+                    "modified_at": artifact.modified_at,
+                    "tenant_id": artifact.tenant_id,
+                    "created_by_key_id": artifact.created_by_key_id,
+                    "job_id": artifact.job_id,
+                    "kind": artifact.kind,
+                    "storage_relpath": artifact.storage_relpath,
+                    "checksum_sha256": artifact.checksum_sha256,
+                    "size_bytes": artifact.size_bytes,
+                    "content_type": artifact.content_type,
+                    "expires_at": artifact.expires_at,
+                    "abs_path": abs_path,
+                    "backup_path": backup_path,
+                }
+            )
+        if artifacts:
+            Artifact.objects.filter(pk__in=[artifact.pk for artifact in artifacts]).delete()
+    except Exception:
+        for snapshot in snapshots:
+            backup_path = str(snapshot["backup_path"])
+            abs_path = str(snapshot["abs_path"])
+            if backup_path and os.path.exists(backup_path):
+                os.replace(backup_path, abs_path)
+        raise
+    return snapshots
+
+
+def _restore_stashed_artifacts(snapshots: list[dict[str, object]]) -> None:
+    for snapshot in snapshots:
+        backup_path = str(snapshot["backup_path"])
+        abs_path = str(snapshot["abs_path"])
+        if backup_path and os.path.exists(backup_path):
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            os.replace(backup_path, abs_path)
+        fields = {
+            key: value
+            for key, value in snapshot.items()
+            if key not in {"abs_path", "backup_path"}
+        }
+        Artifact.objects.create(**fields)
+
+
+def _discard_stashed_artifacts(snapshots: list[dict[str, object]]) -> None:
+    for snapshot in snapshots:
+        _safe_remove_file(str(snapshot["backup_path"]))
+
+
+def _revoke_job_pipeline(job_id: int) -> None:
+    task_id = (
+        IngestionJob.objects.filter(pk=job_id).values_list("celery_task_id", flat=True).first()
+        or ""
+    )
+    if not task_id:
+        return
+    try:
+        current_app.control.revoke(
+            task_id,
+            terminate=True,
+            signal=settings.CELERY_CANCEL_SIGNAL,
+        )
+    except Exception:
+        pass
+
+
+def _rollback_created_jobs(jobs: list[IngestionJob], source_paths: list[str] | None = None) -> None:
+    for job in jobs:
+        _revoke_job_pipeline(job.id)
+        stored_relpath = (
+            IngestionJob.objects.filter(pk=job.id).values_list("source_relpath", flat=True).first()
+            or job.source_relpath
+            or ""
+        )
+        job.delete()
+        if stored_relpath:
+            _safe_remove_file(os.path.join(settings.DATA_ROOT, stored_relpath))
+
+    for path in source_paths or []:
+        _safe_remove_file(path)
+
+
+def _retry_snapshot(job: IngestionJob) -> dict[str, object]:
+    return {
+        "attempt": job.attempt,
+        "status": job.status,
+        "stage": job.stage,
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+        "error_details_json": job.error_details_json,
+        "queued_at": job.queued_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "duration_ms": job.duration_ms,
+        "scan_ms": job.scan_ms,
+        "convert_ms": job.convert_ms,
+        "export_ms": job.export_ms,
+        "chunk_ms": job.chunk_ms,
+        "celery_task_id": job.celery_task_id,
+        "worker_hostname": job.worker_hostname,
+    }
+
+
+def _restore_retry_snapshot(job: IngestionJob, snapshot: dict[str, object]) -> None:
+    for field, value in snapshot.items():
+        setattr(job, field, value)
+    job.save(update_fields=list(snapshot.keys()))
+
+
 class DocumentViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
@@ -258,6 +380,7 @@ class DocumentViewSet(
         comparison_id = uuid.uuid4()
         jobs = []
         created_jobs = []
+        created_source_paths_by_job = {}
         for profile in profiles:
             options_json = (
                 base_options
@@ -300,6 +423,7 @@ class DocumentViewSet(
                 options_json=options_json or {},
             )
             created_jobs.append(job)
+            created_source_paths_by_job[job.id] = abs_path
 
         queued_job_ids = set()
         try:
@@ -308,13 +432,28 @@ class DocumentViewSet(
                 queued_job_ids.add(job.id)
                 jobs.append({"job_id": job.id, "profile": job.profile})
         except Exception:
-            for job in created_jobs:
-                if job.id in queued_job_ids:
-                    continue
-                source_relpath = job.source_relpath
-                job.delete()
-                if source_relpath:
-                    _safe_remove_file(os.path.join(settings.DATA_ROOT, source_relpath))
+            rollback_jobs = [job for job in created_jobs if job.id not in queued_job_ids]
+            rollback_paths = [
+                created_source_paths_by_job[job.id]
+                for job in rollback_jobs
+                if job.id in created_source_paths_by_job
+            ]
+            _rollback_created_jobs(rollback_jobs, rollback_paths)
+            if jobs:
+                return Response(
+                    {
+                        "error_code": "PARTIAL_QUEUE_FAILURE",
+                        "message": (
+                            "Some comparison jobs were queued, but not all profiles could "
+                            "be submitted. Track the returned jobs before retrying."
+                        ),
+                        "comparison_id": str(comparison_id),
+                        "document_id": document.id,
+                        "jobs": jobs,
+                        "failed_profiles": [job.profile for job in rollback_jobs],
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
             return _queue_unavailable_response()
 
         return Response(
@@ -503,36 +642,38 @@ class JobViewSet(
                 {"error_code": "RETRY_LIMIT", "message": "Retry limit reached."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        artifacts = Artifact.objects.filter(job=job)
-        for artifact in artifacts:
-            abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
-            try:
-                if os.path.exists(abs_path):
-                    os.remove(abs_path)
-            except OSError:
-                pass
-        artifacts.delete()
 
+        snapshot = _retry_snapshot(job)
         prev_status = job.status
         prev_stage = job.stage
-        job.attempt += 1
-        job.status = IngestionJobStatus.QUEUED
-        job.stage = IngestionStage.SCANNING
-        job.error_code = ""
-        job.error_message = ""
-        job.error_details_json = None
-        job.queued_at = timezone.now()
-        job.started_at = None
-        job.finished_at = None
-        job.duration_ms = None
-        job.scan_ms = None
-        job.convert_ms = None
-        job.export_ms = None
-        job.chunk_ms = None
-        job.save()
-        queue_job_webhooks(job, prev_status, prev_stage)
+        stashed_artifacts = []
+        try:
+            stashed_artifacts = _stash_job_artifacts_for_retry(job)
+            job.attempt += 1
+            job.status = IngestionJobStatus.QUEUED
+            job.stage = IngestionStage.SCANNING
+            job.error_code = ""
+            job.error_message = ""
+            job.error_details_json = None
+            job.queued_at = timezone.now()
+            job.started_at = None
+            job.finished_at = None
+            job.duration_ms = None
+            job.scan_ms = None
+            job.convert_ms = None
+            job.export_ms = None
+            job.chunk_ms = None
+            job.save()
+            start_ingestion_pipeline(job.id)
+        except Exception:
+            _restore_retry_snapshot(job, snapshot)
+            _restore_stashed_artifacts(stashed_artifacts)
+            return _queue_unavailable_response()
 
-        start_ingestion_pipeline(job.id)
+        _discard_stashed_artifacts(stashed_artifacts)
+        job.refresh_from_db()
+        if job.status == IngestionJobStatus.QUEUED and job.stage == IngestionStage.SCANNING:
+            queue_job_webhooks(job, prev_status, prev_stage)
         return Response(JobSerializer(job).data)
 
 

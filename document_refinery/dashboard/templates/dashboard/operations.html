@@ -1,0 +1,470 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery — Operations{% endblock %}
+
+{% block header_extra %}
+  <div class="card">
+    <div class="page-intro">
+      <h2>Operations</h2>
+      <div class="muted">
+        Staff view for queue health, worker status, system signals, and recent failures.
+        Tenant-facing upload and comparison tools live on <a href="/dashboard/tools/">Tenant tools</a>.
+      </div>
+    </div>
+  </div>
+  <div class="card" style="padding: 16px 18px;">
+    <div class="row" style="justify-content: space-between;">
+      <div style="min-width: min(420px, 100%); display: grid; gap: 8px;">
+        <label for="apiKeyInput" class="muted" style="text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px;">API key</label>
+        <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
+        <div class="actions">
+          <button id="saveKeyBtn" type="button">Use key</button>
+          <button class="ghost" id="clearKeyBtn" type="button">Clear key</button>
+          <button class="secondary" id="refreshBtn" type="button">Refresh now</button>
+        </div>
+        <div class="row muted" style="gap: 10px;">
+          <label class="pill" style="cursor: pointer;">
+            <input type="checkbox" id="autoRefresh" />
+            Auto-refresh (10s)
+          </label>
+          <span>Last update: <span id="lastUpdated">—</span></span>
+          <span>Kept only in memory on this page.</span>
+        </div>
+        <div class="muted" id="statusLine">Waiting for API key.</div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section class="cta-grid">
+    <a class="link-card" href="/dashboard/tools/">
+      <strong>Tenant tools</strong>
+      <span>Upload documents, inspect jobs, and compare profile outputs.</span>
+    </a>
+    <a class="link-card" href="/dashboard/webhook-deliveries/">
+      <strong>Webhook logs</strong>
+      <span>Filter recent webhook deliveries and inspect retry state.</span>
+    </a>
+    <a class="link-card" href="/dashboard/api-keys/">
+      <strong>API keys</strong>
+      <span>Rotate keys, adjust scopes, and review upload defaults.</span>
+    </a>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h3>Queued</h3>
+      <div class="stat" id="statQueued">—</div>
+    </div>
+    <div class="card">
+      <h3>Running</h3>
+      <div class="stat" id="statRunning">—</div>
+    </div>
+    <div class="card">
+      <h3>Succeeded</h3>
+      <div class="stat" id="statSucceeded">—</div>
+    </div>
+    <div class="card">
+      <h3>Failed</h3>
+      <div class="stat" id="statFailed">—</div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h3>Durations (24h)</h3>
+      <div class="list">
+        <div class="mono">Avg: <span id="statAvg">—</span> ms</div>
+        <div class="mono">P50: <span id="statP50">—</span> ms</div>
+        <div class="mono">P95: <span id="statP95">—</span> ms</div>
+        <div class="mono">Total: <span id="statTotal">—</span> ms</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Stages running</h3>
+      <div class="list" id="stagesRunning">No active stages.</div>
+    </div>
+    <div class="card">
+      <h3>Workers</h3>
+      <div class="list" id="workerList">—</div>
+    </div>
+    <div class="card">
+      <h3>System status</h3>
+      <div class="list" id="systemStatus">—</div>
+    </div>
+    <div class="card">
+      <h3>Metrics (internal)</h3>
+      <pre class="metrics" id="metricsText">—</pre>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h3>Recent failures</h3>
+      <div class="list" id="recentFailures">—</div>
+    </div>
+    <div class="card">
+      <h3>Recent finished</h3>
+      <div class="list" id="recentFinished">—</div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const statusLine = document.getElementById("statusLine");
+    const apiKeyInput = document.getElementById("apiKeyInput");
+    const saveKeyBtn = document.getElementById("saveKeyBtn");
+    const clearKeyBtn = document.getElementById("clearKeyBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const autoRefresh = document.getElementById("autoRefresh");
+    const lastUpdated = document.getElementById("lastUpdated");
+
+    const fields = {
+      queued: document.getElementById("statQueued"),
+      running: document.getElementById("statRunning"),
+      succeeded: document.getElementById("statSucceeded"),
+      failed: document.getElementById("statFailed"),
+      avg: document.getElementById("statAvg"),
+      p50: document.getElementById("statP50"),
+      p95: document.getElementById("statP95"),
+      total: document.getElementById("statTotal"),
+      stages: document.getElementById("stagesRunning"),
+      workers: document.getElementById("workerList"),
+      system: document.getElementById("systemStatus"),
+      failures: document.getElementById("recentFailures"),
+      finished: document.getElementById("recentFinished"),
+      metrics: document.getElementById("metricsText"),
+    };
+
+    function setStatus(message, isError = false) {
+      statusLine.textContent = message;
+      statusLine.className = isError ? "error" : "muted";
+    }
+
+    function loadSavedKey() {
+      apiKeyInput.value = "";
+    }
+
+    function saveKey() {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Paste an API key before saving it for this session.", true);
+        return false;
+      }
+      setStatus("API key ready for this page.");
+      return true;
+    }
+
+    function clearSavedKey() {
+      apiKeyInput.value = "";
+      setStatus("API key cleared from this page.");
+    }
+
+    function createPill(text) {
+      const node = document.createElement("span");
+      node.className = "pill";
+      node.textContent = text;
+      return node;
+    }
+
+    function clearNode(node) {
+      while (node.firstChild) {
+        node.removeChild(node.firstChild);
+      }
+    }
+
+    function formatBytes(value) {
+      if (value === null || value === undefined) return "—";
+      if (value < 1024) return `${value} B`;
+      if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+      if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+      return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    }
+
+    function formatPercent(value) {
+      if (value === null || value === undefined) return "—";
+      return `${Number(value).toFixed(1)}%`;
+    }
+
+    function formatDuration(value) {
+      if (value === null || value === undefined) return "—";
+      return `${value} ms`;
+    }
+
+    function formatUptime(seconds) {
+      if (seconds === null || seconds === undefined) return "—";
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (days) return `${days}d ${hours}h`;
+      if (hours) return `${hours}h ${minutes}m`;
+      return `${minutes}m`;
+    }
+
+    async function fetchJson(path) {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Add an API key to load operational data.", true);
+        throw new Error("missing key");
+      }
+      const res = await fetch(path, {
+        headers: {
+          Authorization: `Api-Key ${key}`,
+        },
+      });
+      if (!res.ok) {
+        let message = `Request failed (${res.status})`;
+        try {
+          const payload = await res.json();
+          if (payload.message) {
+            message = payload.message;
+          }
+        } catch (err) {
+          // ignore parse failures
+        }
+        throw new Error(message);
+      }
+      return res.json();
+    }
+
+    async function fetchAuthorized(path, options = {}) {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Add an API key to run this action.", true);
+        throw new Error("missing key");
+      }
+      const headers = options.headers || {};
+      headers.Authorization = `Api-Key ${key}`;
+      return fetch(path, { ...options, headers });
+    }
+
+    function canRetryJob(job) {
+      if (!job) return false;
+      if (!["FAILED", "QUARANTINED"].includes(job.status)) return false;
+      if (job.attempt === null || job.attempt === undefined) return true;
+      if (job.max_retries === null || job.max_retries === undefined) return true;
+      return job.attempt < job.max_retries;
+    }
+
+    async function retryJob(jobId) {
+      try {
+        const res = await fetchAuthorized(`/v1/jobs/${jobId}/retry/`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          let detail = `Retry failed (${res.status})`;
+          try {
+            const payload = await res.json();
+            if (payload.message) {
+              detail = payload.message;
+            }
+          } catch (err) {
+            // ignore parse failures
+          }
+          setStatus(detail, true);
+          return null;
+        }
+        const payload = await res.json();
+        setStatus(`Job ${payload.id} re-queued.`);
+        await refresh();
+        return payload;
+      } catch (err) {
+        setStatus("Retry failed.", true);
+        return null;
+      }
+    }
+
+    function renderSummary(data) {
+      fields.queued.textContent = data.jobs.queued ?? 0;
+      fields.running.textContent = data.jobs.running ?? 0;
+      fields.succeeded.textContent = data.jobs.succeeded ?? 0;
+      fields.failed.textContent = data.jobs.failed ?? 0;
+      fields.avg.textContent = data.durations_ms.avg_24h ?? "—";
+      fields.p50.textContent = data.durations_ms.p50_24h ?? "—";
+      fields.p95.textContent = data.durations_ms.p95_24h ?? "—";
+      fields.total.textContent = data.durations_ms.total_24h ?? "—";
+
+      clearNode(fields.stages);
+      const stageEntries = Object.entries(data.stages_running || {});
+      if (!stageEntries.length) {
+        fields.stages.textContent = "No active stages.";
+      } else {
+        stageEntries.forEach(([name, count]) => {
+          fields.stages.appendChild(createPill(`${String(name).toLowerCase()}: ${count}`));
+        });
+      }
+
+      clearNode(fields.failures);
+      const failures = data.recent_failures || [];
+      if (!failures.length) {
+        fields.failures.textContent = "No recent failures.";
+      } else {
+        failures.forEach((item) => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "list";
+          const row = document.createElement("div");
+          row.className = "row";
+          row.appendChild(createPill(`Job ${item.id}`));
+          row.appendChild(createPill(`Status: ${item.status || "—"}`));
+          row.appendChild(createPill(`Stage: ${item.stage || "—"}`));
+          if (item.error_code) {
+            row.appendChild(createPill(`Error: ${item.error_code}`));
+          }
+          if (item.finished_at) {
+            row.appendChild(createPill(`Finished: ${new Date(item.finished_at).toLocaleString()}`));
+          }
+          if (canRetryJob(item)) {
+            const retryBtn = document.createElement("button");
+            retryBtn.className = "secondary";
+            retryBtn.type = "button";
+            retryBtn.textContent = "Retry";
+            retryBtn.addEventListener("click", () => retryJob(item.id));
+            row.appendChild(retryBtn);
+          }
+          wrapper.appendChild(row);
+
+          if (item.error_message) {
+            const message = document.createElement("div");
+            message.className = "metrics";
+            message.textContent = item.error_message;
+            wrapper.appendChild(message);
+          }
+          fields.failures.appendChild(wrapper);
+        });
+      }
+
+      clearNode(fields.finished);
+      const finished = data.recent_finished || [];
+      if (!finished.length) {
+        fields.finished.textContent = "No finished jobs yet.";
+      } else {
+        finished.forEach((item) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          row.appendChild(createPill(`Job ${item.id}`));
+          row.appendChild(createPill(`Profile: ${item.profile || "—"}`));
+          row.appendChild(createPill(`Status: ${item.status || "—"}`));
+          if (item.finished_at) {
+            row.appendChild(createPill(`Finished: ${new Date(item.finished_at).toLocaleString()}`));
+          }
+          if (item.duration_ms !== null && item.duration_ms !== undefined) {
+            row.appendChild(createPill(`Duration: ${formatDuration(item.duration_ms)}`));
+          }
+          fields.finished.appendChild(row);
+        });
+      }
+    }
+
+    function renderWorkers(data) {
+      clearNode(fields.workers);
+      const workers = data.workers || [];
+      if (!workers.length) {
+        fields.workers.textContent = "No workers reported.";
+        return;
+      }
+      workers.forEach((worker) => {
+        fields.workers.appendChild(
+          createPill(
+            `${worker.hostname} · ${worker.pool || "unknown"} · ${worker.active_tasks} active · concurrency ${worker.concurrency ?? "—"}`
+          )
+        );
+      });
+    }
+
+    function renderSystem(data) {
+      const cpu = data.cpu || {};
+      const mem = data.memory || {};
+      const disk = data.disk || {};
+      const gpu = data.gpu || {};
+      const load = Array.isArray(cpu.loadavg)
+        ? cpu.loadavg.map((value) => Number(value).toFixed(2)).join(" / ")
+        : "—";
+
+      clearNode(fields.system);
+      fields.system.appendChild(createPill(`db: ${data.checks?.db ? "ok" : "down"}`));
+      fields.system.appendChild(createPill(`broker: ${data.checks?.broker ? "ok" : "down"}`));
+      fields.system.appendChild(createPill(`cpu: ${cpu.count ?? "—"} cores · load ${load}`));
+      fields.system.appendChild(
+        createPill(
+          `mem: ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${formatPercent(mem.percent)})`
+        )
+      );
+      fields.system.appendChild(
+        createPill(
+          `disk(/): ${formatBytes(disk.root?.used)} / ${formatBytes(disk.root?.total)} (${formatPercent(disk.root?.percent)})`
+        )
+      );
+      fields.system.appendChild(
+        createPill(
+          `disk(data): ${
+            disk.data_root
+              ? `${formatBytes(disk.data_root.used)} / ${formatBytes(disk.data_root.total)} (${formatPercent(disk.data_root.percent)})`
+              : "n/a"
+          }`
+        )
+      );
+      fields.system.appendChild(createPill(`uptime: ${formatUptime(data.uptime_seconds)}`));
+      if (gpu.available && Array.isArray(gpu.gpus) && gpu.gpus.length) {
+        fields.system.appendChild(
+          createPill(
+            `gpu: ${gpu.gpus
+              .map(
+                (item) =>
+                  `${item.name} · ${item.utilization_pct ?? "—"}% · ${item.memory_used_mb ?? "—"}/${item.memory_total_mb ?? "—"} MB`
+              )
+              .join(" | ")}`
+          )
+        );
+      } else {
+        fields.system.appendChild(createPill(`gpu: ${gpu.reason || "unavailable"}`));
+      }
+      if (gpu.driver_version) {
+        fields.system.appendChild(createPill(`driver: ${gpu.driver_version}`));
+      }
+      fields.metrics.textContent = data.metrics?.text || "—";
+    }
+
+    async function refresh() {
+      setStatus("Loading operational data...");
+      try {
+        const [summary, workers, system] = await Promise.all([
+          fetchJson("/v1/dashboard/summary"),
+          fetchJson("/v1/dashboard/workers"),
+          fetch("/dashboard/system").then((res) => res.json()),
+        ]);
+        renderSummary(summary);
+        renderWorkers(workers);
+        renderSystem(system);
+        setStatus("Operational data updated.");
+        lastUpdated.textContent = new Date().toLocaleTimeString();
+      } catch (err) {
+        if (!apiKeyInput.value.trim()) {
+          setStatus("Add an API key to load operational data.", true);
+          return;
+        }
+        setStatus(err.message || "Failed to load operational data.", true);
+      }
+    }
+
+    saveKeyBtn.addEventListener("click", () => {
+      if (saveKey()) {
+        refresh();
+      }
+    });
+    clearKeyBtn.addEventListener("click", clearSavedKey);
+    refreshBtn.addEventListener("click", refresh);
+
+    loadSavedKey();
+    if (apiKeyInput.value.trim()) {
+      refresh();
+    }
+
+    setInterval(() => {
+      if (autoRefresh.checked) {
+        refresh();
+      }
+    }, 10000);
+  </script>
+{% endblock %}

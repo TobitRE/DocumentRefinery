@@ -95,3 +95,10 @@ class TestCoreViews(TestCase):
         text = response.content.decode("utf-8")
         self.assertIn('docling_jobs_total{status="queued"}', text)
         self.assertIn('docling_jobs_total{status="running"}', text)
+
+    def test_home_page(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Document Refinery", content)
+        self.assertIn("/dashboard/tools/", content)

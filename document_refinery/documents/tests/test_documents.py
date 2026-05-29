@@ -365,3 +365,50 @@ class TestDocumentCompare(TestCase):
             self.assertEqual(response.status_code, 503)
             self.assertEqual(response.data["error_code"], "QUEUE_UNAVAILABLE")
             self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 0)
+            compare_upload_dir = os.path.join("uploads", "quarantine", str(self.tenant.id))
+            compare_paths = []
+            for root, _dirs, files in os.walk(os.path.join(tmpdir, compare_upload_dir)):
+                compare_paths.extend(files)
+            self.assertEqual(compare_paths, [])
+
+    def test_compare_partial_queue_failure_keeps_published_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document(tmpdir)
+            calls = {"count": 0}
+
+            def fake_queue(job_id):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    IngestionJob.objects.filter(pk=job_id).update(celery_task_id="task-queued-1")
+                    return None
+                raise RuntimeError("broker down")
+
+            with patch(
+                "documents.views.start_ingestion_pipeline",
+                side_effect=fake_queue,
+            ), patch("documents.views.current_app.control.revoke") as revoke_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.id}/compare/",
+                    {"profiles": ["fast_text", "structured"]},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(response.data["error_code"], "PARTIAL_QUEUE_FAILURE")
+            remaining_jobs = list(IngestionJob.objects.filter(document=doc))
+            self.assertEqual(len(remaining_jobs), 1)
+            self.assertEqual(response.data["comparison_id"], str(remaining_jobs[0].comparison_id))
+            self.assertEqual(
+                response.data["jobs"],
+                [{"job_id": remaining_jobs[0].id, "profile": "fast_text"}],
+            )
+            self.assertEqual(response.data["failed_profiles"], ["structured"])
+            self.assertEqual(remaining_jobs[0].profile, "fast_text")
+            self.assertEqual(remaining_jobs[0].celery_task_id, "task-queued-1")
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, remaining_jobs[0].source_relpath)))
+            revoke_mock.assert_not_called()
+            compare_upload_dir = os.path.join("uploads", "quarantine", str(self.tenant.id))
+            compare_paths = []
+            for root, _dirs, files in os.walk(os.path.join(tmpdir, compare_upload_dir)):
+                compare_paths.extend(files)
+            self.assertEqual(len(compare_paths), 1)

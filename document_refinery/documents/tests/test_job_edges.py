@@ -175,37 +175,49 @@ class TestJobRetryArtifacts(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
 
     def test_retry_clears_existing_artifacts(self):
-        doc = Document.objects.create(
-            tenant=self.tenant,
-            created_by_key=self.api_key,
-            original_filename="sample.pdf",
-            sha256="b" * 64,
-            mime_type="application/pdf",
-            size_bytes=10,
-            storage_relpath_quarantine="uploads/quarantine/b/b.pdf",
-        )
-        job = IngestionJob.objects.create(
-            tenant=self.tenant,
-            created_by_key=self.api_key,
-            document=doc,
-            status=IngestionJobStatus.FAILED,
-            stage=IngestionStage.EXPORTING,
-        )
-        Artifact.objects.create(
-            tenant=self.tenant,
-            created_by_key=self.api_key,
-            job=job,
-            kind=ArtifactKind.DOCLING_JSON,
-            storage_relpath="artifacts/a/b/docling.json",
-            checksum_sha256="c" * 64,
-            size_bytes=10,
-        )
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = Document.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                original_filename="sample.pdf",
+                sha256="b" * 64,
+                mime_type="application/pdf",
+                size_bytes=10,
+                storage_relpath_quarantine="uploads/quarantine/b/b.pdf",
+            )
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+            )
+            relpath = "artifacts/a/b/docling.json"
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(b"stale")
+            Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=job,
+                kind=ArtifactKind.DOCLING_JSON,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=10,
+            )
 
-        with patch("documents.views.start_ingestion_pipeline"):
-            response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+            def fake_queue(job_id):
+                self.assertEqual(job_id, job.id)
+                self.assertEqual(Artifact.objects.filter(job=job).count(), 0)
+                self.assertFalse(os.path.exists(abs_path))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(Artifact.objects.filter(job=job).count(), 0)
+            with patch("documents.views.start_ingestion_pipeline", side_effect=fake_queue):
+                response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(Artifact.objects.filter(job=job).count(), 0)
+            self.assertFalse(os.path.exists(abs_path))
 
     def test_retry_requires_write_scope(self):
         doc = Document.objects.create(
@@ -229,3 +241,136 @@ class TestJobRetryArtifacts(TestCase):
         with patch("documents.views.start_ingestion_pipeline"):
             response = self.client.post(f"/v1/jobs/{job.id}/retry/")
         self.assertEqual(response.status_code, 403)
+
+    def test_retry_queue_failure_restores_job_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = Document.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                original_filename="sample.pdf",
+                sha256="3" * 64,
+                mime_type="application/pdf",
+                size_bytes=10,
+                storage_relpath_quarantine="uploads/quarantine/3/3.pdf",
+            )
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=1,
+                max_retries=3,
+                error_code="DOCLING_CONVERT_FAILED",
+                error_message="conversion failed",
+            )
+            relpath = "artifacts/retry-failure/docling.json"
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(b"stale")
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=job,
+                kind=ArtifactKind.DOCLING_JSON,
+                storage_relpath=relpath,
+                checksum_sha256="d" * 64,
+                size_bytes=10,
+            )
+
+            def fake_queue(job_id):
+                self.assertEqual(job_id, job.id)
+                self.assertEqual(Artifact.objects.filter(job=job).count(), 0)
+                self.assertFalse(os.path.exists(abs_path))
+                raise RuntimeError("broker down")
+
+            with patch("documents.views.start_ingestion_pipeline", side_effect=fake_queue):
+                response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["error_code"], "QUEUE_UNAVAILABLE")
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.FAILED)
+            self.assertEqual(job.stage, IngestionStage.EXPORTING)
+            self.assertEqual(job.attempt, 1)
+            self.assertEqual(job.error_code, "DOCLING_CONVERT_FAILED")
+            self.assertEqual(job.error_message, "conversion failed")
+            self.assertTrue(Artifact.objects.filter(pk=artifact.pk).exists())
+            self.assertTrue(os.path.exists(abs_path))
+            with open(abs_path, "rb") as handle:
+                self.assertEqual(handle.read(), b"stale")
+
+    def test_retry_stash_failure_restores_job_state(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="4" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/4/4.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=doc,
+            status=IngestionJobStatus.FAILED,
+            stage=IngestionStage.EXPORTING,
+            attempt=1,
+            max_retries=3,
+            error_code="DOCLING_CONVERT_FAILED",
+            error_message="conversion failed",
+        )
+
+        with patch(
+            "documents.views._stash_job_artifacts_for_retry",
+            side_effect=RuntimeError("artifact storage unavailable"),
+        ), patch("documents.views.start_ingestion_pipeline") as start_mock:
+            response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error_code"], "QUEUE_UNAVAILABLE")
+        start_mock.assert_not_called()
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJobStatus.FAILED)
+        self.assertEqual(job.stage, IngestionStage.EXPORTING)
+        self.assertEqual(job.attempt, 1)
+        self.assertEqual(job.error_code, "DOCLING_CONVERT_FAILED")
+        self.assertEqual(job.error_message, "conversion failed")
+
+    def test_retry_skips_queued_webhook_if_worker_already_advanced_job(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="5" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/5/5.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=doc,
+            status=IngestionJobStatus.FAILED,
+            stage=IngestionStage.EXPORTING,
+            max_retries=3,
+            error_code="DOCLING_CONVERT_FAILED",
+            error_message="conversion failed",
+        )
+
+        def fake_queue(job_id):
+            IngestionJob.objects.filter(pk=job_id).update(
+                status=IngestionJobStatus.RUNNING,
+                stage=IngestionStage.CONVERTING,
+            )
+
+        with patch("documents.views.start_ingestion_pipeline", side_effect=fake_queue), patch(
+            "documents.views.queue_job_webhooks"
+        ) as webhook_mock:
+            response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], IngestionJobStatus.RUNNING)
+        webhook_mock.assert_not_called()

@@ -14,6 +14,37 @@
   </section>
 
   <section class="card">
+    <form method="get" class="form-grid">
+      <div class="row">
+        <div class="field" style="min-width: 220px;">
+          <label for="endpoint">Endpoint</label>
+          <select id="endpoint" name="endpoint">
+            <option value="">All endpoints</option>
+            {% for endpoint in endpoints %}
+              <option value="{{ endpoint.id }}" {% if selected_endpoint == endpoint.id|stringformat:"s" %}selected{% endif %}>
+                {{ endpoint.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="min-width: 220px;">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            <option value="">All statuses</option>
+            {% for value, label in status_choices %}
+              <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="submit">Apply filters</button>
+        <a class="pill" href="/dashboard/webhook-deliveries/">Clear filters</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
     <table class="table">
       <thead>
         <tr>
