@@ -32,6 +32,9 @@ class TestDoclingOptions(TestCase):
             validate_docling_options({"exports": "markdown"})
         with self.assertRaises(ValidationError):
             validate_docling_options({"exports": [1, 2]})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"exports": ["markdown", "vlm_json"]})
+        validate_docling_options({"exports": ["markdown", "text", "doctags"]})
 
     def test_validates_ocr(self):
         with self.assertRaises(ValidationError):
@@ -42,6 +45,38 @@ class TestDoclingOptions(TestCase):
             validate_docling_options({"ocr_languages": "en"})
         with self.assertRaises(ValidationError):
             validate_docling_options({"ocr_languages": [1, "en"]})
+
+    def test_validates_structured_docling_options(self):
+        validate_docling_options(
+            {
+                "do_ocr": True,
+                "ocr_engine": "rapidocr",
+                "ocr_languages": ["de", "en"],
+                "force_full_page_ocr": False,
+                "do_table_structure": True,
+                "generate_parsed_pages": True,
+                "generate_picture_images": True,
+                "images_scale": 2.0,
+            }
+        )
+
+    def test_validates_ocr_engine(self):
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"ocr_engine": "unknown"})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"ocr_options": {"kind": "unknown"}})
+
+    def test_rejects_known_unsupported_docling_features(self):
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"do_picture_description": True})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"do_picture_classification": True})
+        validate_docling_options(
+            {"do_picture_description": False, "do_picture_classification": False}
+        )
+
+    def test_preserves_unknown_json_fallback_keys(self):
+        validate_docling_options({"custom_future_key": {"enabled": True}})
 
 
 class TestAllowedUploadMimeTypes(TestCase):

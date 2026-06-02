@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from .docling_options import STRUCTURED_OPTION_KEYS
 from .models import Artifact, Document, IngestionJob, WebhookEndpoint
 from .profiles import PROFILE_NAMES
 from .validators import validate_webhook_url
@@ -54,6 +55,11 @@ class DocumentIngestSerializer(serializers.Serializer):
     )
 
 
+class DoclingOptionsResolveSerializer(serializers.Serializer):
+    profile = serializers.ChoiceField(choices=PROFILE_NAMES, required=False, allow_blank=True)
+    options_json = serializers.JSONField(required=False)
+
+
 class ArtifactSerializer(serializers.ModelSerializer):
     class Meta:
         model = Artifact
@@ -71,6 +77,7 @@ class ArtifactSerializer(serializers.ModelSerializer):
 
 class JobSerializer(serializers.ModelSerializer):
     error_details_json = serializers.SerializerMethodField()
+    options_json = serializers.SerializerMethodField()
 
     class Meta:
         model = IngestionJob
@@ -91,6 +98,14 @@ class JobSerializer(serializers.ModelSerializer):
             "convert_ms",
             "export_ms",
             "chunk_ms",
+            "docling_version",
+            "docling_core_version",
+            "docling_parse_version",
+            "options_json",
+            "runtime_json",
+            "result_metrics_json",
+            "worker_hostname",
+            "celery_task_id",
             "attempt",
             "max_retries",
             "error_code",
@@ -103,6 +118,22 @@ class JobSerializer(serializers.ModelSerializer):
         if getattr(settings, "API_INCLUDE_ERROR_DETAILS", False):
             return obj.error_details_json
         return None
+
+    def get_options_json(self, obj):
+        options = obj.options_json if isinstance(obj.options_json, dict) else {}
+        sanitized = {}
+        for key, value in options.items():
+            if key == "ocr_options" and isinstance(value, dict):
+                nested = {
+                    nested_key: value[nested_key]
+                    for nested_key in ("kind", "lang", "force_full_page_ocr")
+                    if nested_key in value
+                }
+                if nested:
+                    sanitized[key] = nested
+            elif key in STRUCTURED_OPTION_KEYS:
+                sanitized[key] = value
+        return sanitized
 
 
 class WebhookEndpointSerializer(serializers.ModelSerializer):

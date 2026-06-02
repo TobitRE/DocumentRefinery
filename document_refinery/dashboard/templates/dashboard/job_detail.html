@@ -1,0 +1,159 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Job #{{ job.id }}{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Job detail</div>
+      <h1 class="page-title">Job #{{ job.id }}</h1>
+      <div class="dr-page-description">
+        {{ job.document.original_filename }} · profile <span class="mono">{{ job.profile|default:"-" }}</span>
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/jobs/">Back to jobs</a>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div data-job-detail-page>
+    <section class="dr-auth-panel" data-api-key-panel>
+      <div class="dr-toolbar">
+        <div class="field" style="min-width: min(28rem, 100%);">
+          <label for="apiKeyInput">API key for artifact preview</label>
+          <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
+        </div>
+        <button id="saveKeyBtn" type="button" data-api-key-use>Use key</button>
+        <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear key</button>
+        <span class="muted" id="statusLine" data-api-key-status>Waiting for API key.</span>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top: 1rem;">
+      <div class="card-body">
+        <div class="dr-grid">
+          <div class="panel">
+            <div class="muted">Status</div>
+            <div><span class="status status-neutral">{{ job.status }}</span></div>
+          </div>
+          <div class="panel">
+            <div class="muted">Stage</div>
+            <div><span class="status status-neutral">{{ job.stage }}</span></div>
+          </div>
+          <div class="panel">
+            <div class="muted">Duration</div>
+            <div class="mono">{{ job.duration_ms|default:"-" }} ms</div>
+          </div>
+          <div class="panel">
+            <div class="muted">Docling</div>
+            <div class="mono">{{ job.docling_version|default:"-" }}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top: 1rem;">
+      <div class="card-body">
+        <ul class="nav nav-tabs" data-bs-toggle="tabs">
+          <li class="nav-item"><a href="#tab-overview" class="nav-link active" data-bs-toggle="tab">Overview</a></li>
+          <li class="nav-item"><a href="#tab-artifacts" class="nav-link" data-bs-toggle="tab">Artifacts</a></li>
+          <li class="nav-item"><a href="#tab-options" class="nav-link" data-bs-toggle="tab">Options</a></li>
+          <li class="nav-item"><a href="#tab-runtime" class="nav-link" data-bs-toggle="tab">Runtime</a></li>
+          <li class="nav-item"><a href="#tab-errors" class="nav-link" data-bs-toggle="tab">Errors</a></li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane active show" id="tab-overview">
+            <div class="dr-grid" style="margin-top: 1rem;">
+              <div class="panel">
+                <div class="muted">Document</div>
+                <div class="mono">#{{ job.document_id }}</div>
+                <div>{{ job.document.original_filename }}</div>
+              </div>
+              <div class="panel">
+                <div class="muted">Comparison</div>
+                <div class="mono">{{ job.comparison_id|default:"-" }}</div>
+              </div>
+              <div class="panel">
+                <div class="muted">Attempts</div>
+                <div class="mono">{{ job.attempt }} / {{ job.max_retries }}</div>
+              </div>
+              <div class="panel">
+                <div class="muted">Worker</div>
+                <div class="mono">{{ job.worker_hostname|default:"-" }}</div>
+              </div>
+            </div>
+            <h3 class="card-title" style="margin-top: 1rem;">Result metrics</h3>
+            <pre class="metrics">{{ metrics_text }}</pre>
+          </div>
+
+          <div class="tab-pane" id="tab-artifacts">
+            <div class="dr-table-wrap" style="margin-top: 1rem;">
+              <table class="table table-vcenter">
+                <thead>
+                  <tr>
+                    <th>Kind</th>
+                    <th>Size</th>
+                    <th>Content type</th>
+                    <th>Checksum</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for artifact in artifacts %}
+                    <tr>
+                      <td><span class="mono">{{ artifact.kind }}</span></td>
+                      <td class="mono">{{ artifact.size_bytes }} B</td>
+                      <td>{{ artifact.content_type|default:"-" }}</td>
+                      <td class="mono">{{ artifact.checksum_sha256|slice:":16" }}...</td>
+                      <td>
+                        <button type="button" class="ghost" data-artifact-preview="{{ artifact.id }}">Preview</button>
+                      </td>
+                    </tr>
+                  {% empty %}
+                    <tr>
+                      <td colspan="5" class="text-muted">No artifacts exist for this job yet.</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <div class="muted" data-artifact-preview-status>Preview uses the API artifact preview endpoint and tenant-scoped API key.</div>
+            <pre class="metrics dr-json-preview" data-artifact-preview-output>No preview loaded.</pre>
+          </div>
+
+          <div class="tab-pane" id="tab-options">
+            <pre class="metrics" style="margin-top: 1rem;">{{ options_text }}</pre>
+          </div>
+
+          <div class="tab-pane" id="tab-runtime">
+            <div class="dr-grid" style="margin-top: 1rem;">
+              <div class="panel">
+                <div class="muted">docling-core</div>
+                <div class="mono">{{ job.docling_core_version|default:"-" }}</div>
+              </div>
+              <div class="panel">
+                <div class="muted">docling-parse</div>
+                <div class="mono">{{ job.docling_parse_version|default:"-" }}</div>
+              </div>
+              <div class="panel">
+                <div class="muted">Celery task</div>
+                <div class="mono">{{ job.celery_task_id|default:"-" }}</div>
+              </div>
+            </div>
+            <pre class="metrics" style="margin-top: 1rem;">{{ runtime_text }}</pre>
+          </div>
+
+          <div class="tab-pane" id="tab-errors">
+            <div class="panel" style="margin-top: 1rem;">
+              <div class="muted">Error code</div>
+              <div class="mono">{{ job.error_code|default:"-" }}</div>
+              <div class="muted" style="margin-top: .5rem;">Message</div>
+              <div>{{ job.error_message|default:"-" }}</div>
+            </div>
+            <pre class="metrics" style="margin-top: 1rem;">{{ error_details_text }}</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+{% endblock %}

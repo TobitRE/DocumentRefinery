@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from authn.permissions import APIKeyRequired, HasScope
 from documents.models import IngestionJob, IngestionJobStatus
+from .runtime import runtime_diagnostics_payload
 
 
 def _percentile(values: list[int], percentile: float) -> int | None:
@@ -237,5 +238,14 @@ class UsageReportView(APIView):
             else None,
         }
         return Response(payload)
+
+
+class DashboardRuntimeView(APIView):
+    permission_classes = [APIKeyRequired, HasScope]
+    required_scopes = ["dashboard:read"]
+
+    def get(self, request):
+        force = request.query_params.get("refresh") in {"1", "true", "yes"}
+        return Response(runtime_diagnostics_payload(force_refresh=force))
 
 # Create your views here.

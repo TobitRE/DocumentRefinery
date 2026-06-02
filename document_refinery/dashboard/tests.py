@@ -1,3 +1,6 @@
+import os
+import tempfile
+import time
 from datetime import timedelta
 from unittest.mock import MagicMock, patch, mock_open
 
@@ -8,6 +11,11 @@ from rest_framework.test import APIClient
 
 from authn.models import APIKey, Tenant
 from dashboard import web_views
+from dashboard.runtime import (
+    SMOKE_LOCK_FILENAME,
+    SMOKE_RATE_FILENAME,
+    run_runtime_smoke,
+)
 from documents.models import Document, IngestionJob, IngestionJobStatus, IngestionStage
 from documents.models import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint
 
@@ -158,6 +166,34 @@ class TestDashboardAPI(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json().get("error_code"), "INVALID_DATE_FILTER")
 
+    def test_runtime_endpoint_requires_dashboard_read_and_returns_payload(self):
+        payload = {
+            "summary": {"ok": 1, "warnings": 0, "failures": 0},
+            "packages": [],
+            "environment": {},
+            "filesystem": {},
+            "tools": {},
+            "ocr_backends": {},
+            "celery": {},
+        }
+        with patch("dashboard.views.runtime_diagnostics_payload", return_value=payload):
+            response = self.client.get("/v1/dashboard/runtime")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["summary"]["ok"], 1)
+
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        APIKey.objects.create(
+            tenant=self.tenant,
+            name="NoDashboardScope",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=["documents:read"],
+            active=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {raw_key}")
+        response = self.client.get("/v1/dashboard/runtime")
+        self.assertEqual(response.status_code, 403)
+
 
 @override_settings(WEBHOOK_ALLOWED_HOSTS=["example.com"])
 class TestDashboardWebViews(TestCase):
@@ -184,16 +220,107 @@ class TestDashboardWebViews(TestCase):
         self.assertEqual(response.status_code, 200)
         content = response.content.decode("utf-8")
         self.assertIn("Operations", content)
+        self.assertIn("tabler.min.css", content)
+        self.assertIn("/dashboard/upload/", content)
 
         response = self.client.get("/dashboard/tools/")
         self.assertEqual(response.status_code, 200)
         content = response.content.decode("utf-8")
-        self.assertIn("Tenant Tools", content)
+        self.assertIn("PDF upload", content)
         self.assertIn("Use key", content)
         self.assertNotIn(">Save key<", content)
         self.assertNotIn("sessionStorage", content)
-        self.assertIn("PARTIAL_QUEUE_FAILURE", content)
-        self.assertIn("failed_profiles", content)
+        self.assertIn('accept="application/pdf,.pdf" multiple', content)
+        self.assertIn("Structured Docling controls", content)
+        self.assertIn("legacy image export", content)
+
+    def test_dashboard_tabler_target_pages(self):
+        document = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="a" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/a/a.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=document,
+            status=IngestionJobStatus.SUCCEEDED,
+            stage=IngestionStage.FINALIZING,
+            profile="fast_text",
+            options_json={"max_num_pages": 1},
+            runtime_json={"DOCLING_DEVICE": "cpu"},
+            result_metrics_json={"page_count": 1},
+        )
+
+        checks = [
+            ("/dashboard/upload/", "PDF upload"),
+            ("/dashboard/jobs/", "Ingestion jobs"),
+            (f"/dashboard/jobs/{job.id}/", "Job #"),
+            ("/dashboard/compare/", "Compare Docling profiles"),
+            ("/dashboard/profiles/", "Profiles and capabilities"),
+        ]
+        for path, text in checks:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            content = response.content.decode("utf-8")
+            self.assertIn("tabler.min.css", content)
+            self.assertIn(text, content)
+
+        response = self.client.get("/dashboard/profiles/")
+        content = response.content.decode("utf-8")
+        self.assertIn("real_chunking", content)
+        self.assertIn("multi_format_upload", content)
+        self.assertIn("remote_services", content)
+
+    def test_runtime_page_and_smoke_action(self):
+        payload = {
+            "summary": {"ok": 3, "warnings": 1, "failures": 0},
+            "packages": [
+                {
+                    "name": "docling",
+                    "version": "2.96.1",
+                    "expected": "2.96.1",
+                    "status": "ok",
+                }
+            ],
+            "environment": {"DOCLING_DEVICE": "cpu"},
+            "filesystem": {
+                "data_root": {"status": "ok"},
+                "hf_home": {"status": "warn"},
+            },
+            "tools": {
+                "ffmpeg": {"status": "warn"},
+                "tesseract": {"status": "warn"},
+            },
+            "ocr_backends": {
+                "rapidocr": {"status": "ok"},
+                "easyocr": {"status": "warn"},
+            },
+            "celery": {
+                "broker": {"status": "ok"},
+                "workers_online": 1,
+                "active_tasks": 0,
+            },
+        }
+        with patch("dashboard.web_views.runtime_diagnostics_payload", return_value=payload):
+            response = self.client.get("/dashboard/runtime/")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Runtime Diagnostics", content)
+        self.assertIn("full_vlm (legacy image export, no real VLM)", content)
+
+        with patch(
+            "dashboard.web_views.run_runtime_smoke",
+            return_value={"status": "ok", "profile": "fast_text", "elapsed_ms": 10},
+        ) as smoke:
+            response = self.client.post("/dashboard/runtime/smoke", {"profile": "fast_text"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+        smoke.assert_called_once_with(profile="fast_text")
 
     def test_system_status_payload(self):
         mock_broker = MagicMock()
@@ -233,6 +360,8 @@ class TestDashboardWebViews(TestCase):
         self.assertIn('name="allowed_upload_mime_types"', content)
         self.assertIn('value="application/pdf, application/x-pdf"', content)
         self.assertIn('name="scope_choices"', content)
+        self.assertIn("Structured Docling controls", content)
+        self.assertIn("JSON fallback", content)
 
         response = self.client.post(
             "/dashboard/api-keys/new/",
@@ -265,6 +394,8 @@ class TestDashboardWebViews(TestCase):
         self.assertIn('name="allowed_upload_mime_types"', content)
         self.assertIn('value="application/pdf, application/x-pdf"', content)
         self.assertIn('name="scope_choices"', content)
+        self.assertIn("Structured Docling controls", content)
+        self.assertIn("JSON fallback", content)
 
         response = self.client.post(
             f"/dashboard/api-keys/{api_key.id}/",
@@ -363,6 +494,31 @@ class TestDashboardWebViews(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("Create an API key", response.content.decode("utf-8"))
+
+
+class TestRuntimeSmokeGuards(TestCase):
+    def _state_path(self, tmpdir: str, filename: str) -> str:
+        state_dir = os.path.join(tmpdir, "runtime")
+        os.makedirs(state_dir, exist_ok=True)
+        return os.path.join(state_dir, filename)
+
+    def test_runtime_smoke_uses_shared_file_lock(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            with open(self._state_path(tmpdir, SMOKE_LOCK_FILENAME), "w", encoding="utf-8") as handle:
+                handle.write(str(time.time()))
+
+            payload = run_runtime_smoke()
+
+        self.assertEqual(payload["status"], "busy")
+
+    def test_runtime_smoke_uses_shared_file_rate_limit(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            with open(self._state_path(tmpdir, SMOKE_RATE_FILENAME), "w", encoding="utf-8") as handle:
+                handle.write(str(time.time()))
+
+            payload = run_runtime_smoke()
+
+        self.assertEqual(payload["status"], "rate_limited")
 
 
 class TestDashboardWebHelpers(TestCase):

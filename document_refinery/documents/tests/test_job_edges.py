@@ -174,6 +174,16 @@ class TestJobRetryArtifacts(TestCase):
         )
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
 
+    def _attach_clean_source(self, doc: Document, tmpdir: str, content: bytes = b"%PDF-1.4 retry\n"):
+        relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+        abs_path = os.path.join(tmpdir, relpath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        with open(abs_path, "wb") as handle:
+            handle.write(content)
+        doc.storage_relpath_clean = relpath
+        doc.save(update_fields=["storage_relpath_clean"])
+        return relpath, abs_path
+
     def test_retry_clears_existing_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = Document.objects.create(
@@ -185,12 +195,18 @@ class TestJobRetryArtifacts(TestCase):
                 size_bytes=10,
                 storage_relpath_quarantine="uploads/quarantine/b/b.pdf",
             )
+            self._attach_clean_source(doc, tmpdir)
             job = IngestionJob.objects.create(
                 tenant=self.tenant,
                 created_by_key=self.api_key,
                 document=doc,
                 status=IngestionJobStatus.FAILED,
                 stage=IngestionStage.EXPORTING,
+                docling_version="2.old",
+                docling_core_version="core.old",
+                docling_parse_version="parse.old",
+                runtime_json={"old": True},
+                result_metrics_json={"page_count": 9},
             )
             relpath = "artifacts/a/b/docling.json"
             abs_path = os.path.join(tmpdir, relpath)
@@ -218,6 +234,15 @@ class TestJobRetryArtifacts(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(Artifact.objects.filter(job=job).count(), 0)
             self.assertFalse(os.path.exists(abs_path))
+            job.refresh_from_db()
+            self.assertTrue(job.source_relpath)
+            self.assertNotEqual(job.source_relpath, doc.storage_relpath_clean)
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, job.source_relpath)))
+            self.assertEqual(job.docling_version, "")
+            self.assertEqual(job.docling_core_version, "")
+            self.assertEqual(job.docling_parse_version, "")
+            self.assertEqual(job.runtime_json, {})
+            self.assertEqual(job.result_metrics_json, {})
 
     def test_retry_requires_write_scope(self):
         doc = Document.objects.create(
@@ -253,6 +278,7 @@ class TestJobRetryArtifacts(TestCase):
                 size_bytes=10,
                 storage_relpath_quarantine="uploads/quarantine/3/3.pdf",
             )
+            self._attach_clean_source(doc, tmpdir)
             job = IngestionJob.objects.create(
                 tenant=self.tenant,
                 created_by_key=self.api_key,
@@ -263,6 +289,11 @@ class TestJobRetryArtifacts(TestCase):
                 max_retries=3,
                 error_code="DOCLING_CONVERT_FAILED",
                 error_message="conversion failed",
+                docling_version="2.old",
+                docling_core_version="core.old",
+                docling_parse_version="parse.old",
+                runtime_json={"old": True},
+                result_metrics_json={"page_count": 9},
             )
             relpath = "artifacts/retry-failure/docling.json"
             abs_path = os.path.join(tmpdir, relpath)
@@ -296,38 +327,45 @@ class TestJobRetryArtifacts(TestCase):
             self.assertEqual(job.attempt, 1)
             self.assertEqual(job.error_code, "DOCLING_CONVERT_FAILED")
             self.assertEqual(job.error_message, "conversion failed")
+            self.assertEqual(job.docling_version, "2.old")
+            self.assertEqual(job.docling_core_version, "core.old")
+            self.assertEqual(job.docling_parse_version, "parse.old")
+            self.assertEqual(job.runtime_json, {"old": True})
+            self.assertEqual(job.result_metrics_json, {"page_count": 9})
             self.assertTrue(Artifact.objects.filter(pk=artifact.pk).exists())
             self.assertTrue(os.path.exists(abs_path))
             with open(abs_path, "rb") as handle:
                 self.assertEqual(handle.read(), b"stale")
 
     def test_retry_stash_failure_restores_job_state(self):
-        doc = Document.objects.create(
-            tenant=self.tenant,
-            created_by_key=self.api_key,
-            original_filename="sample.pdf",
-            sha256="4" * 64,
-            mime_type="application/pdf",
-            size_bytes=10,
-            storage_relpath_quarantine="uploads/quarantine/4/4.pdf",
-        )
-        job = IngestionJob.objects.create(
-            tenant=self.tenant,
-            created_by_key=self.api_key,
-            document=doc,
-            status=IngestionJobStatus.FAILED,
-            stage=IngestionStage.EXPORTING,
-            attempt=1,
-            max_retries=3,
-            error_code="DOCLING_CONVERT_FAILED",
-            error_message="conversion failed",
-        )
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = Document.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                original_filename="sample.pdf",
+                sha256="4" * 64,
+                mime_type="application/pdf",
+                size_bytes=10,
+                storage_relpath_quarantine="uploads/quarantine/4/4.pdf",
+            )
+            self._attach_clean_source(doc, tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=1,
+                max_retries=3,
+                error_code="DOCLING_CONVERT_FAILED",
+                error_message="conversion failed",
+            )
 
-        with patch(
-            "documents.views._stash_job_artifacts_for_retry",
-            side_effect=RuntimeError("artifact storage unavailable"),
-        ), patch("documents.views.start_ingestion_pipeline") as start_mock:
-            response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+            with patch(
+                "documents.views._stash_job_artifacts_for_retry",
+                side_effect=RuntimeError("artifact storage unavailable"),
+            ), patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(f"/v1/jobs/{job.id}/retry/")
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error_code"], "QUEUE_UNAVAILABLE")
@@ -340,14 +378,52 @@ class TestJobRetryArtifacts(TestCase):
         self.assertEqual(job.error_message, "conversion failed")
 
     def test_retry_skips_queued_webhook_if_worker_already_advanced_job(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = Document.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                original_filename="sample.pdf",
+                sha256="5" * 64,
+                mime_type="application/pdf",
+                size_bytes=10,
+                storage_relpath_quarantine="uploads/quarantine/5/5.pdf",
+            )
+            self._attach_clean_source(doc, tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                max_retries=3,
+                error_code="DOCLING_CONVERT_FAILED",
+                error_message="conversion failed",
+            )
+
+            def fake_queue(job_id):
+                IngestionJob.objects.filter(pk=job_id).update(
+                    status=IngestionJobStatus.RUNNING,
+                    stage=IngestionStage.CONVERTING,
+                )
+
+            with patch("documents.views.start_ingestion_pipeline", side_effect=fake_queue), patch(
+                "documents.views.queue_job_webhooks"
+            ) as webhook_mock:
+                response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], IngestionJobStatus.RUNNING)
+        webhook_mock.assert_not_called()
+
+    def test_retry_requires_readable_source(self):
         doc = Document.objects.create(
             tenant=self.tenant,
             created_by_key=self.api_key,
             original_filename="sample.pdf",
-            sha256="5" * 64,
+            sha256="6" * 64,
             mime_type="application/pdf",
             size_bytes=10,
-            storage_relpath_quarantine="uploads/quarantine/5/5.pdf",
+            storage_relpath_quarantine="uploads/quarantine/6/6.pdf",
         )
         job = IngestionJob.objects.create(
             tenant=self.tenant,
@@ -356,21 +432,11 @@ class TestJobRetryArtifacts(TestCase):
             status=IngestionJobStatus.FAILED,
             stage=IngestionStage.EXPORTING,
             max_retries=3,
-            error_code="DOCLING_CONVERT_FAILED",
-            error_message="conversion failed",
         )
 
-        def fake_queue(job_id):
-            IngestionJob.objects.filter(pk=job_id).update(
-                status=IngestionJobStatus.RUNNING,
-                stage=IngestionStage.CONVERTING,
-            )
-
-        with patch("documents.views.start_ingestion_pipeline", side_effect=fake_queue), patch(
-            "documents.views.queue_job_webhooks"
-        ) as webhook_mock:
+        with patch("documents.views.start_ingestion_pipeline") as start_mock:
             response = self.client.post(f"/v1/jobs/{job.id}/retry/")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], IngestionJobStatus.RUNNING)
-        webhook_mock.assert_not_called()
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error_code"], "MISSING_SOURCE_FILE")
+        start_mock.assert_not_called()

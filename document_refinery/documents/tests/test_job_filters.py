@@ -61,6 +61,27 @@ class TestJobFilters(TestCase):
         self.assertIn(job_new.id, ids)
         self.assertNotIn(job_old.id, ids)
 
+    def test_job_detail_sanitizes_options_json(self):
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=self.doc,
+            status=IngestionJobStatus.QUEUED,
+            stage=IngestionStage.SCANNING,
+            options_json={
+                "max_num_pages": 10,
+                "future_secret_key": "token",
+                "ocr_options": {"kind": "rapidocr", "service_url": "https://private.example"},
+            },
+        )
+
+        response = self.client.get(f"/v1/jobs/{job.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["options_json"]["max_num_pages"], 10)
+        self.assertEqual(response.data["options_json"]["ocr_options"], {"kind": "rapidocr"})
+        self.assertNotIn("future_secret_key", response.data["options_json"])
+
     def test_updated_after_space_separator(self):
         job = IngestionJob.objects.create(
             tenant=self.tenant,

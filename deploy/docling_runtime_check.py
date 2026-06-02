@@ -117,8 +117,8 @@ def check_environment(reporter: Reporter) -> None:
 def check_imports(reporter: Reporter) -> None:
     try:
         from docling.datamodel.base_models import InputFormat  # noqa: F401
-        from docling.datamodel.document import DoclingDocument  # noqa: F401
         from docling.document_converter import DocumentConverter, PdfFormatOption  # noqa: F401
+        from docling_core.types.doc import DoclingDocument  # noqa: F401
 
         reporter.ok("docling:imports", "core Docling imports succeeded")
     except Exception as exc:

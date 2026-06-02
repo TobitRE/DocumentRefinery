@@ -66,6 +66,14 @@ Für maschinenlesbare Ausgabe:
 venv/bin/python deploy/docling_runtime_check.py --json
 ```
 
+Die gleiche Runtime-Sicht ist im Staff-Dashboard verfuegbar:
+
+- `/dashboard/runtime/`: staff-only Runtime Diagnostics mit manueller Smoke-Aktion.
+- `/v1/dashboard/runtime`: API-Key-Endpoint mit Scope `dashboard:read`.
+
+Die Dashboard-Smoke-Aktion nutzt ein kleines internes PDF, eine Sperre, ein Rate-Limit und einen
+Timeout. Sie prueft keine echten VLM- oder Chunking-Pipelines.
+
 Wenn der Smoke beim Modell-Download scheitert, zuerst prüfen:
 
 ```sh
@@ -92,6 +100,13 @@ export DOCLING_NUM_THREADS=2
   `export_to_doctags()`-API statt der deprecated Document-Token-Methode.
 - Die Celery-Worker-Concurrency ist initial konservativ auf `1` gesetzt, weil Docling 2.96 intern
   mehrere Threads und Modellkomponenten verwendet.
+- Das Dashboard bietet PDF-first Upload, strukturierte Docling-Controls und JSON-Fallback.
+  Die Endpunkte `/v1/docling/profiles/`, `/v1/docling/capabilities/` und
+  `/v1/docling/options/resolve/` liefern Profil-, Capability- und effektive Optionsdaten.
+  Sie sind mit `dashboard:read` oder `documents:write` nutzbar.
+- Artefaktvorschauen laufen ueber `/v1/artifacts/{id}/preview/` mit Tenant-Scoping und
+  Groessenlimit. `figures_zip` wird nur als ZIP-Metadaten angezeigt; `chunks_json` bleibt ein
+  DocTags-Kompatibilitaetspayload, bis echtes Chunking separat implementiert wird.
 
 ## Nach dem Update prüfen
 

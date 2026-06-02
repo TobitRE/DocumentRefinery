@@ -10,6 +10,11 @@ from django.utils import timezone
 
 from authn.models import APIKey, Tenant
 from documents.models import Artifact, ArtifactKind, Document, IngestionJob, IngestionJobStatus, IngestionStage
+from documents.docling_options import (
+    build_pdf_pipeline_options,
+    normalize_docling_options,
+    resolve_effective_options,
+)
 from documents.profiles import PROFILE_NAMES, build_profile_pipeline_options
 from documents.tasks import (
     DOCLING_UNLIMITED,
@@ -120,7 +125,7 @@ class TestPipelineTasks(TestCase):
                 def __init__(self, document):
                     self.document = document
 
-            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import DoclingDocument
 
             with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
                 mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
@@ -150,7 +155,7 @@ class TestPipelineTasks(TestCase):
                 def __init__(self, document):
                     self.document = document
 
-            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import DoclingDocument
 
             captured = {}
 
@@ -189,7 +194,7 @@ class TestPipelineTasks(TestCase):
                     self.status = "partial_success"
                     self.errors = [{"message": "page failed"}]
 
-            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import DoclingDocument
 
             with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
                 mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
@@ -218,7 +223,7 @@ class TestPipelineTasks(TestCase):
                 def __init__(self, document):
                     self.document = document
 
-            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import DoclingDocument
 
             captured = {}
 
@@ -253,7 +258,7 @@ class TestPipelineTasks(TestCase):
                 def __init__(self, document):
                     self.document = document
 
-            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import DoclingDocument
             from docling_core.types.doc import ImageRef, PictureItem, Size
 
             image_bytes = b"fakeimage"
@@ -294,6 +299,34 @@ class TestPipelineTasks(TestCase):
                 names = archive.namelist()
             self.assertEqual(len(names), 1)
 
+    def test_export_artifacts_respects_empty_exports(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+            job.options_json = {"exports": []}
+            job.save(update_fields=["options_json"])
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling_core.types.doc import DoclingDocument
+
+            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
+                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+                docling_convert_task(job.id)
+
+            export_artifacts_task(job.id)
+
+            kinds = set(Artifact.objects.filter(job=job).values_list("kind", flat=True))
+            self.assertEqual(kinds, {ArtifactKind.DOCLING_JSON})
+
     def test_export_artifacts_failure_marks_job_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
@@ -311,7 +344,7 @@ class TestPipelineTasks(TestCase):
                 def __init__(self, document):
                     self.document = document
 
-            from docling.datamodel.document import DoclingDocument
+            from docling_core.types.doc import DoclingDocument
 
             with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
                 mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
@@ -332,6 +365,65 @@ class TestPipelineTasks(TestCase):
         for profile in PROFILE_NAMES:
             with self.subTest(profile=profile):
                 self.assertIsNotNone(build_profile_pipeline_options(profile))
+
+    def test_effective_options_merge_layers_and_profile_overrides(self):
+        self.tenant.docling_options_json = {
+            "max_num_pages": 8,
+            "unknown_future_option": "kept",
+        }
+        self.tenant.save(update_fields=["docling_options_json"])
+        self.api_key.docling_options_json = {"ocr": True, "exports": ["text"]}
+        self.api_key.save(update_fields=["docling_options_json"])
+
+        resolved = resolve_effective_options(
+            self.api_key,
+            {"ocr_languages": ["de"], "max_file_size": 1024},
+            "fast_text",
+        )
+
+        effective = resolved["effective_options"]
+        self.assertEqual(effective["max_num_pages"], 8)
+        self.assertEqual(effective["max_file_size"], 1024)
+        self.assertEqual(effective["exports"], ["text", "markdown", "doctags"])
+        self.assertFalse(effective["do_ocr"])
+        self.assertEqual(effective["ocr_options"]["lang"], ["de"])
+        self.assertEqual(effective["unknown_future_option"], "kept")
+        self.assertTrue(
+            any("unknown_future_option" in warning for warning in resolved["warnings"])
+        )
+
+    def test_request_ocr_options_override_profile_defaults(self):
+        resolved = resolve_effective_options(
+            self.api_key,
+            {"ocr_languages": ["de"], "ocr_engine": "rapidocr"},
+            "ocr_only",
+        )
+
+        ocr_options = resolved["effective_options"]["ocr_options"]
+        self.assertEqual(ocr_options["kind"], "rapidocr")
+        self.assertEqual(ocr_options["lang"], ["de"])
+        self.assertTrue(ocr_options["force_full_page_ocr"])
+
+    def test_normalize_legacy_ocr_keys(self):
+        normalized, warnings = normalize_docling_options(
+            {"ocr": True, "ocr_languages": ["en"], "ocr_engine": "rapidocr"}
+        )
+        self.assertTrue(normalized["do_ocr"])
+        self.assertEqual(normalized["ocr_options"]["lang"], ["en"])
+        self.assertEqual(normalized["ocr_options"]["kind"], "rapidocr")
+        self.assertTrue(any("ocr" in warning for warning in warnings))
+
+    def test_build_pdf_pipeline_options_from_effective_options(self):
+        pipeline_options = build_pdf_pipeline_options(
+            {
+                "do_ocr": True,
+                "ocr_options": {"kind": "auto", "lang": ["en"]},
+                "do_table_structure": True,
+                "generate_parsed_pages": True,
+            }
+        )
+        self.assertTrue(pipeline_options.do_ocr)
+        self.assertTrue(pipeline_options.do_table_structure)
 
 
 class TestCleanupTasks(TestCase):

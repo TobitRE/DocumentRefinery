@@ -1,0 +1,81 @@
+<div class="panel" data-docling-options-controls data-json-target="{{ json_target }}">
+  <div class="row" style="justify-content: space-between;">
+    <div>
+      <strong>Structured Docling controls</strong>
+      <div class="muted">Controls write validated keys; JSON fallback keeps additional compatible keys.</div>
+    </div>
+    <div class="actions">
+      <button type="button" class="ghost" data-options-load>Load from JSON</button>
+      <button type="button" data-options-apply>Apply to JSON</button>
+    </div>
+  </div>
+
+  <div class="dr-options-grid" style="margin-top: .875rem;">
+    <div class="field">
+      <label>Max pages</label>
+      <input type="number" min="0" step="1" data-option-key="max_num_pages" placeholder="0 means no profile limit" />
+    </div>
+    <div class="field">
+      <label>Max file size</label>
+      <input type="number" min="0" step="1" data-option-key="max_file_size" placeholder="Bytes" />
+    </div>
+    <div class="field">
+      <label>OCR engine</label>
+      <select data-option-key="ocr_engine">
+        <option value="auto">auto</option>
+        <option value="rapidocr">rapidocr</option>
+        <option value="easyocr">easyocr</option>
+        <option value="tesseract">tesseract</option>
+        <option value="tesseract_cli">tesseract_cli</option>
+        <option value="mac">mac</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>OCR languages</label>
+      <input type="text" data-option-key="ocr_languages" placeholder="de, en" />
+    </div>
+    <div class="field">
+      <label>Image scale</label>
+      <input type="number" min="0" step="0.1" data-option-key="images_scale" placeholder="2.0" />
+    </div>
+    {% if profiles %}
+      <div class="field">
+        <label>Resolve with profile</label>
+        <select data-options-profile>
+          <option value="">No profile</option>
+          {% for profile in profiles %}
+            <option value="{{ profile.name }}">{{ profile.name }} - {{ profile.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="dr-feature-list" style="margin-top: .875rem;">
+    <label class="pill"><input type="checkbox" data-option-boolean data-option-key="do_ocr" /> OCR</label>
+    <label class="pill"><input type="checkbox" data-option-boolean data-option-key="do_table_structure" /> Tables</label>
+    <label class="pill"><input type="checkbox" data-option-boolean data-option-key="generate_parsed_pages" /> Parsed pages</label>
+    <label class="pill"><input type="checkbox" data-option-boolean data-option-key="generate_picture_images" /> Figure images</label>
+    <label class="pill"><input type="checkbox" data-option-key="force_full_page_ocr" /> Full-page OCR</label>
+  </div>
+
+  <div style="margin-top: .875rem;">
+    <div class="muted" style="margin-bottom: .375rem;">Selectable exports</div>
+    <div class="dr-feature-list">
+      <label class="pill"><input type="checkbox" data-export-option value="markdown" /> markdown</label>
+      <label class="pill"><input type="checkbox" data-export-option value="text" /> text</label>
+      <label class="pill"><input type="checkbox" data-export-option value="doctags" /> doctags</label>
+      <label class="pill"><input type="checkbox" data-export-option value="chunks_json" /> chunks_json</label>
+      <label class="pill"><input type="checkbox" data-export-option value="figures_zip" /> figures_zip</label>
+    </div>
+    <div class="muted" style="margin-top: .375rem;">
+      docling_json is always generated. chunks_json is currently a DocTags compatibility payload, not real chunking.
+    </div>
+  </div>
+
+  <div class="actions" style="margin-top: .875rem;">
+    <button type="button" class="ghost" data-options-resolve>Resolve effective options</button>
+    <span class="muted" data-options-status>Ready.</span>
+  </div>
+  <pre class="metrics dr-json-preview" data-options-resolve-output>{}</pre>
+</div>

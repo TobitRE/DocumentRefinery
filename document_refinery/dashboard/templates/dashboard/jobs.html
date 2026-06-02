@@ -1,0 +1,102 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Jobs{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Upload & Jobs</div>
+      <h1 class="page-title">Ingestion jobs</h1>
+      <div class="dr-page-description">Recent jobs with profile, stage, status, document, comparison, and runtime timing filters.</div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/upload/">Upload PDFs</a>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="card-body">
+      <form method="get" class="dr-toolbar">
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            <option value="">Any</option>
+            {% for value, label in status_choices %}
+              <option value="{{ value }}" {% if value == status_filter %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="stage">Stage</label>
+          <select id="stage" name="stage">
+            <option value="">Any</option>
+            {% for value, label in stage_choices %}
+              <option value="{{ value }}" {% if value == stage_filter %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="profile">Profile</label>
+          <select id="profile" name="profile">
+            <option value="">Any</option>
+            {% for profile in profiles %}
+              <option value="{{ profile.name }}" {% if profile.name == profile_filter %}selected{% endif %}>{{ profile.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="document_id">Document ID</label>
+          <input id="document_id" name="document_id" value="{{ document_id_filter }}" />
+        </div>
+        <div class="field">
+          <label for="comparison_id">Comparison ID</label>
+          <input id="comparison_id" name="comparison_id" value="{{ comparison_id_filter }}" />
+        </div>
+        <button type="submit">Apply filters</button>
+        <a class="btn btn-outline-secondary" href="/dashboard/jobs/">Clear</a>
+      </form>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="card-body">
+      <div class="dr-table-wrap">
+        <table class="table table-vcenter">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Status</th>
+              <th>Stage</th>
+              <th>Profile</th>
+              <th>Document</th>
+              <th>Comparison</th>
+              <th>Duration</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in jobs %}
+              <tr>
+                <td><a href="/dashboard/jobs/{{ job.id }}/">#{{ job.id }}</a></td>
+                <td><span class="status status-neutral">{{ job.status }}</span></td>
+                <td><span class="status status-neutral">{{ job.stage }}</span></td>
+                <td><span class="mono">{{ job.profile|default:"-" }}</span></td>
+                <td>
+                  <span class="mono">#{{ job.document_id }}</span><br />
+                  <span class="muted">{{ job.document.original_filename }}</span>
+                </td>
+                <td class="mono">{{ job.comparison_id|default:"-" }}</td>
+                <td class="mono">{{ job.duration_ms|default:"-" }} ms</td>
+                <td class="mono">{{ job.created_at|date:"Y-m-d H:i" }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="8" class="text-muted">No jobs match the current filters.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+{% endblock %}

@@ -116,9 +116,10 @@
         </div>
         <div class="muted">Scopes control which API endpoints the key can call.</div>
       </div>
-      <details class="collapse">
+      {% include "dashboard/_docling_options_controls.html" with json_target="docling_options_json" profiles=profiles %}
+      <details class="collapse" open>
         <summary>
-          <span class="pill">Advanced defaults</span>
+          <span class="pill">JSON fallback</span>
           <span class="muted">Optional Docling JSON applied when uploads omit options.</span>
         </summary>
         <textarea name="docling_options_json" id="docling_options_json">{{ docling_options_text }}</textarea>

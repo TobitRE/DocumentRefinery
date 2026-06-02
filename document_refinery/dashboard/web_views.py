@@ -16,13 +16,18 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.decorators import method_decorator
+from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
 from authn.models import APIKey, Tenant
 from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
+from .runtime import runtime_diagnostics_payload, run_runtime_smoke
+from documents.docling_options import capabilities_payload, profile_catalog
 from documents.models import (
+    Artifact,
     IngestionJob,
     IngestionJobStatus,
+    IngestionStage,
     WebhookDelivery,
     WebhookDeliveryStatus,
     WebhookEndpoint,
@@ -41,11 +46,131 @@ class DashboardPageView(TemplateView):
 
 @method_decorator(staff_member_required, name="dispatch")
 class DashboardToolsPageView(TemplateView):
-    template_name = "dashboard/index.html"
+    template_name = "dashboard/upload.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["nav_active"] = "tools"
+        context["nav_active"] = "upload"
+        context["profiles"] = profile_catalog()
+        context["capabilities"] = capabilities_payload()
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class RuntimeDiagnosticsPageView(TemplateView):
+    template_name = "dashboard/runtime.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nav_active"] = "runtime"
+        context["runtime_payload"] = runtime_diagnostics_payload()
+        context["profiles"] = profile_catalog()
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class DashboardUploadPageView(TemplateView):
+    template_name = "dashboard/upload.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nav_active"] = "upload"
+        context["profiles"] = profile_catalog()
+        context["capabilities"] = capabilities_payload()
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class DashboardJobsPageView(TemplateView):
+    template_name = "dashboard/jobs.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        queryset = (
+            IngestionJob.objects.select_related("tenant", "document", "created_by_key")
+            .order_by("-created_at", "-id")
+        )
+        status_filter = (self.request.GET.get("status") or "").strip()
+        stage_filter = (self.request.GET.get("stage") or "").strip()
+        profile_filter = (self.request.GET.get("profile") or "").strip()
+        document_id = (self.request.GET.get("document_id") or "").strip()
+        comparison_id = (self.request.GET.get("comparison_id") or "").strip()
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        if stage_filter:
+            queryset = queryset.filter(stage=stage_filter)
+        if profile_filter:
+            queryset = queryset.filter(profile=profile_filter)
+        if document_id:
+            queryset = queryset.filter(document_id=document_id)
+        if comparison_id:
+            queryset = queryset.filter(comparison_id=comparison_id)
+
+        context.update(
+            {
+                "nav_active": "jobs",
+                "jobs": queryset[:200],
+                "status_filter": status_filter,
+                "stage_filter": stage_filter,
+                "profile_filter": profile_filter,
+                "document_id_filter": document_id,
+                "comparison_id_filter": comparison_id,
+                "status_choices": IngestionJobStatus.choices,
+                "stage_choices": IngestionStage.choices,
+                "profiles": profile_catalog(),
+            }
+        )
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class DashboardJobDetailPageView(TemplateView):
+    template_name = "dashboard/job_detail.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        job = get_object_or_404(
+            IngestionJob.objects.select_related("tenant", "document", "created_by_key"),
+            pk=kwargs["pk"],
+        )
+        artifacts = Artifact.objects.filter(job=job).order_by("kind", "id")
+        context.update(
+            {
+                "nav_active": "jobs",
+                "job": job,
+                "artifacts": artifacts,
+                "options_text": json.dumps(job.options_json or {}, indent=2, sort_keys=True),
+                "runtime_text": json.dumps(job.runtime_json or {}, indent=2, sort_keys=True),
+                "metrics_text": json.dumps(job.result_metrics_json or {}, indent=2, sort_keys=True),
+                "error_details_text": json.dumps(
+                    job.error_details_json or {}, indent=2, sort_keys=True
+                ),
+            }
+        )
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class ProfileComparisonPageView(TemplateView):
+    template_name = "dashboard/profile_comparison.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nav_active"] = "compare"
+        context["profiles"] = profile_catalog()
+        context["capabilities"] = capabilities_payload()
+        return context
+
+
+@method_decorator(staff_member_required, name="dispatch")
+class DoclingProfilesPageView(TemplateView):
+    template_name = "dashboard/profiles.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["nav_active"] = "profiles"
+        context["profiles"] = profile_catalog()
+        context["capabilities"] = capabilities_payload()
         return context
 
 
@@ -358,6 +483,29 @@ def system_status(request):
 
 
 @staff_member_required
+def runtime_status(request):
+    force = request.GET.get("refresh") in {"1", "true", "yes"}
+    return JsonResponse(runtime_diagnostics_payload(force_refresh=force))
+
+
+@staff_member_required
+@require_POST
+def runtime_smoke(request):
+    profile = (request.POST.get("profile") or "fast_text").strip() or "fast_text"
+    payload = run_runtime_smoke(profile=profile)
+    status_code = 200
+    if payload.get("status") == "busy":
+        status_code = 409
+    elif payload.get("status") == "rate_limited":
+        status_code = 429
+    elif payload.get("status") == "timeout":
+        status_code = 504
+    elif payload.get("status") == "fail":
+        status_code = 500
+    return JsonResponse(payload, status=status_code)
+
+
+@staff_member_required
 def api_keys_list(request):
     keys = APIKey.objects.select_related("tenant").order_by("-created_at")
     return render(
@@ -419,6 +567,7 @@ def api_key_new(request):
             "scope_options": _scope_options(selected_scopes),
             "selected_scopes": selected_scopes,
             "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
+            "profiles": profile_catalog(),
         },
     )
 
@@ -484,6 +633,7 @@ def api_key_detail(request, pk: int):
             "selected_scopes": selected_scopes,
             "docling_options_text": docling_options_text,
             "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
+            "profiles": profile_catalog(),
         },
     )
 

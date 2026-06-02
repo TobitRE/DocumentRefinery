@@ -314,7 +314,8 @@ and a non-existent UUID both return the same `404 Not Found`.
 POST /v1/documents/{document_uuid}/ingest/
 ```
 
-Requires scope: `documents:write`.
+Requires scope: `documents:write`. `mode=retry_failed` also requires
+`jobs:write`, because it mutates and requeues an existing job.
 
 Body (JSON):
 - `mode` (optional) — `reuse_existing` (default), `retry_failed`, or `create_new`
@@ -326,7 +327,7 @@ Mode semantics:
   without starting a duplicate job. If no matching job exists, a new job is
   created.
 - `retry_failed` retries the latest matching `FAILED` or `QUARANTINED` job when
-  it is still below its retry limit.
+  it is still below its retry limit. This mode requires `jobs:write`.
 - `create_new` always creates a new job. Successful jobs and their artifacts are
   not overwritten.
 

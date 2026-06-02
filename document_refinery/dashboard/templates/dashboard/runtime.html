@@ -1,0 +1,135 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Runtime Diagnostics{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Runtime diagnostics</div>
+      <h1 class="page-title">Runtime Diagnostics</h1>
+      <div class="dr-page-description">
+        Staff-only Docling, dependency, cache, filesystem, OCR, FFmpeg, broker, and worker checks.
+      </div>
+    </div>
+    <button type="button" class="ghost" id="runtimeRefresh">Refresh checks</button>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section class="dr-grid">
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Summary</h2>
+        <div class="dr-feature-list">
+          <span class="status status-ok">OK: {{ runtime_payload.summary.ok }}</span>
+          <span class="status status-warn">Warnings: {{ runtime_payload.summary.warnings }}</span>
+          <span class="status status-fail">Failures: {{ runtime_payload.summary.failures }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Packages</h2>
+        <div class="list">
+          {% for package in runtime_payload.packages %}
+            <span class="status status-{{ package.status }}">{{ package.name }}: {{ package.version|default:"missing" }} · {{ package.expected }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Celery</h2>
+        <div class="list">
+          <span class="status status-{{ runtime_payload.celery.broker.status }}">Broker: {{ runtime_payload.celery.broker.status }}</span>
+          <span class="status status-neutral">Workers: {{ runtime_payload.celery.workers_online }}</span>
+          <span class="status status-neutral">Active tasks: {{ runtime_payload.celery.active_tasks }}</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dr-grid" style="margin-top: 1rem;">
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Environment</h2>
+        <pre class="metrics">{{ runtime_payload.environment }}</pre>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Filesystem</h2>
+        <div class="list">
+          <span class="status status-{{ runtime_payload.filesystem.data_root.status }}">DATA_ROOT: {{ runtime_payload.filesystem.data_root.status }}</span>
+          <span class="status status-{{ runtime_payload.filesystem.hf_home.status }}">HF_HOME: {{ runtime_payload.filesystem.hf_home.status }}</span>
+          <span class="status status-neutral">Root disk: {{ runtime_payload.filesystem.root.status }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Tools and OCR</h2>
+        <div class="list">
+          <span class="status status-{{ runtime_payload.tools.ffmpeg.status }}">FFmpeg: {{ runtime_payload.tools.ffmpeg.status }}</span>
+          <span class="status status-{{ runtime_payload.tools.tesseract.status }}">Tesseract: {{ runtime_payload.tools.tesseract.status }}</span>
+          <span class="status status-{{ runtime_payload.ocr_backends.rapidocr.status }}">RapidOCR: {{ runtime_payload.ocr_backends.rapidocr.status }}</span>
+          <span class="status status-{{ runtime_payload.ocr_backends.easyocr.status }}">EasyOCR: {{ runtime_payload.ocr_backends.easyocr.status }}</span>
+          <span class="status status-{{ runtime_payload.ocr_backends.pytesseract.status }}">pytesseract: {{ runtime_payload.ocr_backends.pytesseract.status }}</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="card-body">
+      <h2 class="card-title">Runtime Smoke</h2>
+      <form id="runtimeSmokeForm" method="post" action="/dashboard/runtime/smoke" class="form-grid">
+        {% csrf_token %}
+        <div class="field">
+          <label for="smokeProfile">Profile</label>
+          <select id="smokeProfile" name="profile">
+            {% for profile in profiles %}
+              <option value="{{ profile.name }}">
+                {{ profile.name }}{% if profile.name == "full_vlm" %} (legacy image export, no real VLM){% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="panel">
+          Manual smoke uses an internal one-page PDF, a process lock, a rate limit, and a timeout. It does not enable real VLM or real chunking.
+        </div>
+        <div class="actions">
+          <button type="submit">Run smoke</button>
+        </div>
+      </form>
+      <pre class="metrics" id="runtimeSmokeResult">No smoke result yet.</pre>
+    </div>
+  </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    const smokeForm = document.getElementById("runtimeSmokeForm");
+    const smokeResult = document.getElementById("runtimeSmokeResult");
+    const runtimeRefresh = document.getElementById("runtimeRefresh");
+
+    smokeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      smokeResult.textContent = "Running...";
+      const formData = new FormData(smokeForm);
+      const response = await fetch(smokeForm.action, {
+        method: "POST",
+        body: formData,
+        headers: {"X-CSRFToken": formData.get("csrfmiddlewaretoken")},
+      });
+      const payload = await response.json();
+      smokeResult.textContent = JSON.stringify(payload, null, 2);
+    });
+
+    runtimeRefresh.addEventListener("click", async () => {
+      const response = await fetch("/dashboard/runtime/status?refresh=1");
+      const payload = await response.json();
+      smokeResult.textContent = JSON.stringify(payload.summary || payload, null, 2);
+    });
+  </script>
+{% endblock %}

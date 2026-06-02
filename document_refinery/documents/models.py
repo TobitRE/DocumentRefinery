@@ -102,6 +102,10 @@ class IngestionJob(BaseModel):
     )
     options_json = models.JSONField(default=dict, blank=True)
     docling_version = models.CharField(max_length=50, blank=True)
+    docling_core_version = models.CharField(max_length=50, blank=True)
+    docling_parse_version = models.CharField(max_length=50, blank=True)
+    runtime_json = models.JSONField(default=dict, blank=True)
+    result_metrics_json = models.JSONField(default=dict, blank=True)
 
     queued_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)

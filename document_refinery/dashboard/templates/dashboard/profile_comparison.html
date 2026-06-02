@@ -1,0 +1,100 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Profile Comparison{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Profile comparison</div>
+      <h1 class="page-title">Compare Docling profiles</h1>
+      <div class="dr-page-description">
+        Queue comparison jobs across backend-defined PDF profiles and inspect their returned job set.
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/profiles/">Open profile catalog</a>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div data-comparison-page>
+    <section class="dr-auth-panel dr-sticky-auth" data-api-key-panel>
+      <div class="dr-toolbar">
+        <div class="field" style="min-width: min(28rem, 100%);">
+          <label for="apiKeyInput">API key</label>
+          <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
+        </div>
+        <button id="saveKeyBtn" type="button" data-api-key-use>Use key</button>
+        <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear key</button>
+        <span class="muted" id="statusLine" data-api-key-status>Waiting for API key.</span>
+      </div>
+    </section>
+
+    <div class="dr-grid-wide" style="margin-top: 1rem;">
+      <section class="card">
+        <div class="card-body">
+          <h2 class="card-title">Queue comparison</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="compareDocumentId">Document ID</label>
+              <input type="text" id="compareDocumentId" placeholder="Existing document id" />
+            </div>
+            <div class="checkbox-grid">
+              {% for profile in profiles %}
+                <div class="option-card">
+                  <label>
+                    <input type="checkbox" data-compare-profile value="{{ profile.name }}" />
+                    <span>
+                      <strong>{{ profile.name }} - {{ profile.label }}</strong><br />
+                      <span class="muted">{{ profile.description }}</span>
+                    </span>
+                  </label>
+                  <div class="dr-feature-list">
+                    <span class="status status-neutral">{{ profile.resource_level }}</span>
+                    {% if profile.capabilities.picture_images %}<span class="status status-ok">figure images</span>{% endif %}
+                    {% if profile.capabilities.vlm_pipeline %}<span class="status status-ok">vlm</span>{% else %}<span class="status status-neutral">no vlm</span>{% endif %}
+                    {% if profile.capabilities.real_chunking %}<span class="status status-ok">real chunking</span>{% else %}<span class="status status-neutral">compat chunks</span>{% endif %}
+                  </div>
+                  {% for warning in profile.warnings %}
+                    <div class="status status-warn">{{ warning }}</div>
+                  {% endfor %}
+                </div>
+              {% endfor %}
+            </div>
+            {% include "dashboard/_docling_options_controls.html" with json_target="compareOptionsJson" profiles=profiles %}
+            <details class="collapse" open>
+              <summary>
+                <span class="pill">JSON fallback</span>
+                <span class="muted">Applied before profile overrides.</span>
+              </summary>
+              <textarea id="compareOptionsJson" placeholder='{"max_num_pages": 50}'></textarea>
+            </details>
+            <div class="actions">
+              <button type="button" data-comparison-run>Run comparison</button>
+              <span class="muted" data-comparison-status>No comparison queued.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card">
+        <div class="card-body">
+          <h2 class="card-title">Fetch comparison jobs</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="compareIdInput">Comparison ID</label>
+              <input type="text" id="compareIdInput" placeholder="UUID returned by comparison" />
+            </div>
+            <button type="button" class="ghost" data-comparison-fetch>Fetch jobs</button>
+            <pre class="metrics dr-json-preview" data-comparison-result>No comparison yet.</pre>
+          </div>
+          <div class="panel" style="margin-top: 1rem;">
+            <strong>Artifact comparison boundary</strong>
+            <div class="muted">
+              Text, markdown, DocTags, Docling JSON, and compatibility chunks can be previewed through the artifact preview endpoint. figures_zip is shown as metadata only.
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+{% endblock %}

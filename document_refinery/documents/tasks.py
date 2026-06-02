@@ -20,7 +20,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from clamav_client import clamd
-from docling.datamodel.document import DoclingDocument
+from docling_core.types.doc import DoclingDocument
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
 
@@ -36,6 +36,7 @@ from .models import (
     WebhookDeliveryStatus,
     WebhookEndpoint,
 )
+from .docling_options import build_pdf_pipeline_options
 from .profiles import build_profile_pipeline_options
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
@@ -253,6 +254,32 @@ def _docling_result_details(result) -> dict:
     }
 
 
+def _count_items(value) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return len(value)
+    try:
+        return len(value)
+    except TypeError:
+        return None
+
+
+def _docling_document_metrics(docling_doc: DoclingDocument) -> dict:
+    try:
+        text = docling_doc.export_to_text()
+        text_length = len(text or "")
+    except Exception:
+        text_length = None
+    return {
+        "page_count": _count_items(getattr(docling_doc, "pages", None)),
+        "table_count": _count_items(getattr(docling_doc, "tables", None)) or 0,
+        "picture_count": _count_items(getattr(docling_doc, "pictures", None)) or 0,
+        "text_length": text_length,
+        "chunks_json_kind": "doctags_compatibility_payload",
+    }
+
+
 def _docling_limit(value: int | None, fallback: int | None = None) -> int:
     if value is not None:
         return DOCLING_UNLIMITED if value == 0 else value
@@ -367,7 +394,9 @@ def docling_convert_task(self, job_id: int) -> int:
     )
 
     try:
-        pipeline_options = build_profile_pipeline_options(job.profile)
+        pipeline_options = build_pdf_pipeline_options(job.options_json or {})
+        if not pipeline_options:
+            pipeline_options = build_profile_pipeline_options(job.profile)
         if pipeline_options:
             converter = DocumentConverter(
                 format_options={
@@ -416,6 +445,13 @@ def docling_convert_task(self, job_id: int) -> int:
         raise
 
     job.docling_version = _package_version("docling")
+    job.docling_core_version = _package_version("docling-core")
+    job.docling_parse_version = _package_version("docling-parse")
+    job.runtime_json = {
+        "DOCLING_DEVICE": os.environ.get("DOCLING_DEVICE", ""),
+        "DOCLING_NUM_THREADS": os.environ.get("DOCLING_NUM_THREADS", ""),
+        "HF_HOME": os.environ.get("HF_HOME", ""),
+    }
     job.convert_ms = int((time.monotonic() - start) * 1000)
     job.save()
     return job_id
@@ -447,8 +483,15 @@ def export_artifacts_task(self, job_id: int) -> int:
         _mark_failed(job, "DOCLING_LOAD_FAILED", str(exc), _traceback_details())
         raise
 
+    metrics = _docling_document_metrics(docling_doc)
+    job.result_metrics_json = metrics
+    page_count = metrics.get("page_count")
+    if page_count is not None:
+        job.document.page_count = page_count
+        job.document.save(update_fields=["page_count", "modified_at"])
+
     exports = job.options_json.get("exports") if job.options_json else None
-    if not exports:
+    if exports is None:
         exports = ["markdown", "text", "doctags"]
 
     try:

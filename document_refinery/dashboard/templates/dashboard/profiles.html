@@ -1,0 +1,150 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Docling Profiles{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Docling profile catalog</div>
+      <h1 class="page-title">Profiles and capabilities</h1>
+      <div class="dr-page-description">
+        Read-only view of backend-supported Docling profiles, option schema, exports, and deferred features.
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/compare/">Compare profiles</a>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section class="dr-grid">
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Implemented</h2>
+        <div class="dr-feature-list">
+          {% for item in capabilities.features.implemented %}
+            <span class="status status-ok">{{ item }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Planned later</h2>
+        <div class="dr-feature-list">
+          {% for item in capabilities.features.planned %}
+            <span class="status status-warn">{{ item }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="card-title">Not offered</h2>
+        <div class="dr-feature-list">
+          {% for item in capabilities.features.not_offered %}
+            <span class="status status-fail">{{ item }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="card-body">
+      <h2 class="card-title">Input formats and exports</h2>
+      <div class="dr-grid">
+        <div class="panel">
+          <div class="muted">Implemented inputs</div>
+          <div class="dr-feature-list">
+            {% for item in capabilities.input_formats.implemented %}
+              <span class="status status-ok">{{ item }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="muted">Planned inputs</div>
+          <div class="dr-feature-list">
+            {% for item in capabilities.input_formats.planned %}
+              <span class="status status-warn">{{ item }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="muted">Selectable exports</div>
+          <div class="dr-feature-list">
+            {% for item in capabilities.exports.selectable %}
+              <span class="status status-neutral">{{ item }}</span>
+            {% endfor %}
+          </div>
+          <div class="muted" style="margin-top: .5rem;">docling_json is always generated.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dr-grid" style="margin-top: 1rem;">
+    {% for profile in profiles %}
+      <article class="card">
+        <div class="card-body dr-profile-card">
+          <div class="row" style="justify-content: space-between;">
+            <div>
+              <h2 class="card-title">{{ profile.name }}</h2>
+              <div class="muted">{{ profile.label }}</div>
+            </div>
+            <span class="status status-neutral">{{ profile.resource_level }}</span>
+          </div>
+          <div>{{ profile.description }}</div>
+          <div class="dr-feature-list">
+            {% if profile.capabilities.ocr %}<span class="status status-ok">ocr</span>{% else %}<span class="status status-neutral">no ocr</span>{% endif %}
+            {% if profile.capabilities.table_structure %}<span class="status status-ok">tables</span>{% else %}<span class="status status-neutral">no tables</span>{% endif %}
+            {% if profile.capabilities.parsed_pages %}<span class="status status-ok">parsed pages</span>{% endif %}
+            {% if profile.capabilities.picture_images %}<span class="status status-ok">figure images</span>{% endif %}
+            <span class="status status-neutral">vlm_pipeline: false</span>
+            <span class="status status-neutral">real_chunking: false</span>
+          </div>
+          <div>
+            <div class="muted">Exports</div>
+            <div class="dr-feature-list">
+              {% for export in profile.exports %}
+                <span class="status status-neutral">{{ export }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          {% for warning in profile.warnings %}
+            <div class="status status-warn">{{ warning }}</div>
+          {% endfor %}
+          <details class="collapse">
+            <summary><span class="pill">Pipeline options</span></summary>
+            <pre class="metrics">{{ profile.pipeline_options }}</pre>
+          </details>
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="card-body">
+      <h2 class="card-title">Structured option schema</h2>
+      <div class="dr-table-wrap">
+        <table class="table table-vcenter">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Type</th>
+              <th>Choices</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in capabilities.options_schema %}
+              <tr>
+                <td class="mono">{{ item.key }}</td>
+                <td>{{ item.type }}</td>
+                <td class="mono">{{ item.choices|default:"-" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+{% endblock %}

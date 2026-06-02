@@ -1,7 +1,9 @@
+import json
 import hashlib
 import os
 import shutil
 import uuid
+import zipfile
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -10,6 +12,7 @@ from django.http import FileResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from celery import current_app
 
 from authn.permissions import HasScope
@@ -20,6 +23,7 @@ from django.db import IntegrityError
 
 from .models import (
     Artifact,
+    ArtifactKind,
     Document,
     IngestionJob,
     IngestionJobStatus,
@@ -27,9 +31,16 @@ from .models import (
     WebhookEndpoint,
 )
 from .tasks import queue_job_webhooks, start_ingestion_pipeline
-from .profiles import apply_profile_to_options
+from .docling_options import (
+    apply_profile_overrides,
+    capabilities_payload,
+    normalize_docling_options,
+    profile_catalog,
+    resolve_effective_options,
+)
 from .serializers import (
     ArtifactSerializer,
+    DoclingOptionsResolveSerializer,
     DocumentSerializer,
     DocumentCompareSerializer,
     DocumentIngestSerializer,
@@ -37,6 +48,21 @@ from .serializers import (
     JobSerializer,
     WebhookEndpointSerializer,
 )
+
+ARTIFACT_PREVIEW_BYTES = 256 * 1024
+ARTIFACT_PREVIEW_ZIP_ENTRIES = 200
+DOCLING_METADATA_SCOPES = {"dashboard:read", "documents:write"}
+
+
+def _has_any_scope(api_key, scopes: set[str]) -> bool:
+    return bool(set(api_key.scopes or []) & scopes)
+
+
+def _scope_denied_response() -> Response:
+    return Response(
+        {"error_code": "INSUFFICIENT_SCOPE", "message": "API key scope is insufficient."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
 
 
 def _looks_like_pdf(uploaded) -> bool:
@@ -95,6 +121,17 @@ def _duplicate_document_payload(document: Document) -> dict[str, object]:
     }
 
 
+def _latest_job_summary_payload(job: IngestionJob | None) -> dict[str, object] | None:
+    if not job:
+        return None
+    return {
+        "id": job.id,
+        "uuid": str(job.uuid),
+        "status": job.status,
+        "stage": job.stage,
+    }
+
+
 def _duplicate_document_response(document: Document, request, duplicate_policy: str) -> Response:
     latest_job = _latest_job_for_document(document)
     if duplicate_policy == "return_existing":
@@ -102,7 +139,7 @@ def _duplicate_document_response(document: Document, request, duplicate_policy: 
             {
                 "duplicate": True,
                 "document": DocumentSerializer(document).data,
-                "latest_job": JobSerializer(latest_job).data if latest_job else None,
+                "latest_job": _latest_job_summary_payload(latest_job),
             },
             status=status.HTTP_200_OK,
         )
@@ -116,16 +153,9 @@ def _duplicate_document_response(document: Document, request, duplicate_policy: 
 
 
 def _build_ingestion_options(api_key, options_json, profile: str | None) -> dict:
-    resolved = (
-        options_json
-        or api_key.docling_options_json
-        or getattr(api_key.tenant, "docling_options_json", None)
-        or settings.DOC_DEFAULT_OPTIONS
-        or {}
-    )
-    resolved = apply_profile_to_options(resolved, profile)
-    validate_docling_options(resolved)
-    return resolved or {}
+    resolved = resolve_effective_options(api_key, options_json, profile)
+    validate_docling_options(resolved["effective_options"])
+    return resolved["effective_options"] or {}
 
 
 def _resolve_document_source_abs(document: Document) -> str:
@@ -191,19 +221,38 @@ def _ingest_job_payload(
         "reused": reused,
         "retried": retried,
         "document": DocumentSerializer(document).data,
-        "job": JobSerializer(job).data,
+        "job": _latest_job_summary_payload(job),
         "job_id": job.id,
         "job_uuid": str(job.uuid),
     }
 
 
+def _options_match_job_snapshot(job_options: dict | None, effective_options: dict, profile: str | None) -> bool:
+    job_options = job_options or {}
+    if job_options == (effective_options or {}):
+        return True
+    if not profile:
+        return False
+    try:
+        legacy_effective = apply_profile_overrides(job_options, profile)
+        legacy_effective, _warnings = normalize_docling_options(legacy_effective)
+    except Exception:
+        return False
+    return legacy_effective == (effective_options or {})
+
+
 def _matching_jobs(document: Document, profile: str | None, options_json: dict):
-    return IngestionJob.objects.filter(
+    candidates = IngestionJob.objects.filter(
         tenant=document.tenant,
         document=document,
         profile=profile,
-        options_json=options_json or {},
     ).order_by("-created_at", "-id")
+    compatible_ids = [
+        job.id
+        for job in candidates
+        if _options_match_job_snapshot(job.options_json, options_json or {}, profile)
+    ]
+    return candidates.filter(id__in=compatible_ids)
 
 
 def _missing_source_response() -> Response:
@@ -324,6 +373,11 @@ def _retry_snapshot(job: IngestionJob) -> dict[str, object]:
         "convert_ms": job.convert_ms,
         "export_ms": job.export_ms,
         "chunk_ms": job.chunk_ms,
+        "docling_version": job.docling_version,
+        "docling_core_version": job.docling_core_version,
+        "docling_parse_version": job.docling_parse_version,
+        "runtime_json": job.runtime_json,
+        "result_metrics_json": job.result_metrics_json,
         "celery_task_id": job.celery_task_id,
         "worker_hostname": job.worker_hostname,
         "source_relpath": job.source_relpath,
@@ -379,6 +433,11 @@ def _retry_job(
         job.convert_ms = None
         job.export_ms = None
         job.chunk_ms = None
+        job.docling_version = ""
+        job.docling_core_version = ""
+        job.docling_parse_version = ""
+        job.runtime_json = {}
+        job.result_metrics_json = {}
         job.celery_task_id = ""
         job.save()
         start_ingestion_pipeline(job.id)
@@ -563,6 +622,8 @@ class DocumentViewSet(
 
         profile = serializer.validated_data.get("profile", None)
         mode = serializer.validated_data.get("mode", "reuse_existing")
+        if mode == "retry_failed" and not _has_any_scope(request.auth, {"jobs:write"}):
+            return _scope_denied_response()
         try:
             options_json = _build_ingestion_options(
                 request.auth,
@@ -687,15 +748,9 @@ class DocumentViewSet(
         created_jobs = []
         created_source_paths_by_job = {}
         for profile in profiles:
-            options_json = (
-                base_options
-                or request.auth.docling_options_json
-                or getattr(request.auth.tenant, "docling_options_json", None)
-                or settings.DOC_DEFAULT_OPTIONS
-                or {}
-            )
-            options_json = apply_profile_to_options(options_json, profile)
             try:
+                resolved = resolve_effective_options(request.auth, base_options, profile)
+                options_json = resolved["effective_options"]
                 validate_docling_options(options_json)
             except ValidationError as exc:
                 message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
@@ -815,6 +870,74 @@ class ArtifactViewSet(
             filename=artifact.kind,
             content_type=artifact.content_type or "application/octet-stream",
         )
+
+    @action(detail=True, methods=["get"], url_path="preview")
+    def preview(self, request, pk=None):
+        artifact = self.get_object()
+        abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+        if not os.path.exists(abs_path):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        payload = {
+            "id": artifact.id,
+            "kind": artifact.kind,
+            "job_id": artifact.job_id,
+            "size_bytes": artifact.size_bytes,
+            "content_type": artifact.content_type,
+            "checksum_sha256": artifact.checksum_sha256,
+            "preview_limit_bytes": ARTIFACT_PREVIEW_BYTES,
+            "truncated": False,
+        }
+
+        if artifact.kind == ArtifactKind.FIGURES_ZIP or artifact.content_type == "application/zip":
+            try:
+                with zipfile.ZipFile(abs_path, "r") as archive:
+                    infos = archive.infolist()
+                    entries = [
+                        {
+                            "filename": info.filename,
+                            "size_bytes": info.file_size,
+                            "compressed_size_bytes": info.compress_size,
+                        }
+                        for info in infos[:ARTIFACT_PREVIEW_ZIP_ENTRIES]
+                    ]
+            except zipfile.BadZipFile:
+                return Response(
+                    {"error_code": "INVALID_ZIP", "message": "Artifact is not a valid ZIP file."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            payload.update(
+                {
+                    "preview_type": "zip_metadata",
+                    "entries": entries,
+                    "entry_count": len(infos),
+                    "entries_truncated": len(infos) > ARTIFACT_PREVIEW_ZIP_ENTRIES,
+                }
+            )
+            return Response(payload)
+
+        with open(abs_path, "rb") as handle:
+            raw = handle.read(ARTIFACT_PREVIEW_BYTES + 1)
+        truncated = len(raw) > ARTIFACT_PREVIEW_BYTES
+        if truncated:
+            raw = raw[:ARTIFACT_PREVIEW_BYTES]
+        text = raw.decode("utf-8", errors="replace")
+        payload["truncated"] = truncated
+
+        if artifact.kind in (ArtifactKind.DOCLING_JSON, ArtifactKind.CHUNKS_JSON):
+            if artifact.kind == ArtifactKind.CHUNKS_JSON:
+                payload["compatibility_note"] = (
+                    "DocTags compatibility payload, not real chunking yet."
+                )
+            if not truncated:
+                try:
+                    payload.update({"preview_type": "json", "json": json.loads(text)})
+                    return Response(payload)
+                except json.JSONDecodeError:
+                    pass
+
+        payload.update({"preview_type": "text", "text": text})
+        return Response(payload)
 
 
 class JobViewSet(
@@ -937,7 +1060,16 @@ class JobViewSet(
     @action(detail=True, methods=["post"], url_path="retry")
     def retry(self, request, pk=None):
         job = self.get_object()
-        return _retry_job(job)
+        if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
+            return _retry_job(job)
+        if job.attempt >= job.max_retries:
+            return _retry_job(job)
+        source = _copy_document_source_for_job(job.document)
+        if source:
+            return _retry_job(job, source_relpath=source[0], source_abs_path=source[1])
+        if job.source_relpath and os.path.exists(os.path.join(settings.DATA_ROOT, job.source_relpath)):
+            return _retry_job(job)
+        return _missing_source_response()
 
 
 class WebhookEndpointViewSet(
@@ -972,3 +1104,46 @@ class WebhookEndpointViewSet(
             created_by_key=self.request.auth,
             events=events,
         )
+
+
+class DoclingProfilesView(APIView):
+    permission_classes = [APIKeyRequired, HasScope]
+    required_scopes: list[str] = []
+
+    def get(self, request):
+        if not _has_any_scope(request.auth, DOCLING_METADATA_SCOPES):
+            return _scope_denied_response()
+        return Response({"profiles": profile_catalog()})
+
+
+class DoclingCapabilitiesView(APIView):
+    permission_classes = [APIKeyRequired, HasScope]
+    required_scopes: list[str] = []
+
+    def get(self, request):
+        if not _has_any_scope(request.auth, DOCLING_METADATA_SCOPES):
+            return _scope_denied_response()
+        return Response(capabilities_payload())
+
+
+class DoclingOptionsResolveView(APIView):
+    permission_classes = [APIKeyRequired, HasScope]
+    required_scopes: list[str] = []
+
+    def post(self, request):
+        if not _has_any_scope(request.auth, DOCLING_METADATA_SCOPES):
+            return _scope_denied_response()
+        serializer = DoclingOptionsResolveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.validated_data.get("profile") or None
+        options_json = serializer.validated_data.get("options_json", None)
+        try:
+            resolved = resolve_effective_options(request.auth, options_json, profile)
+            validate_docling_options(resolved["effective_options"])
+        except ValidationError as exc:
+            message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+            return Response(
+                {"error_code": "INVALID_OPTIONS", "message": message},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(resolved)

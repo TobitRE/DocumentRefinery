@@ -29,7 +29,12 @@ Das bestehende Projekt hat bereits:
 - `document_refinery/documents/views.py`
 - `document_refinery/dashboard/web_views.py`
 - `document_refinery/dashboard/templates/dashboard/base.html`
-- `document_refinery/dashboard/templates/dashboard/index.html`
+- `document_refinery/dashboard/templates/dashboard/upload.html`
+- `document_refinery/dashboard/templates/dashboard/jobs.html`
+- `document_refinery/dashboard/templates/dashboard/job_detail.html`
+- `document_refinery/dashboard/templates/dashboard/profile_comparison.html`
+- `document_refinery/dashboard/templates/dashboard/profiles.html`
+- `document_refinery/dashboard/templates/dashboard/runtime.html`
 - `document_refinery/dashboard/templates/dashboard/operations.html`
 - `document_refinery/dashboard/templates/dashboard/api_key_new.html`
 - `document_refinery/dashboard/templates/dashboard/api_key_detail.html`

@@ -1,0 +1,108 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Upload{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Upload & Jobs</div>
+      <h1 class="page-title">PDF upload</h1>
+      <div class="dr-page-description">
+        PDF-only ingestion with structured Docling controls, profile presets, and JSON fallback.
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/jobs/">Open jobs</a>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div data-upload-page>
+    <section class="dr-auth-panel dr-sticky-auth" data-api-key-panel>
+      <div class="dr-toolbar">
+        <div class="field" style="min-width: min(28rem, 100%);">
+          <label for="apiKeyInput">API key</label>
+          <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
+        </div>
+        <button id="saveKeyBtn" type="button" data-api-key-use>Use key</button>
+        <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear key</button>
+        <span class="muted" id="statusLine" data-api-key-status>Waiting for API key.</span>
+      </div>
+    </section>
+
+    <div class="dr-grid-wide" style="margin-top: 1rem;">
+      <section class="card">
+        <div class="card-body">
+          <h2 class="card-title">Upload PDFs</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="uploadFile">PDF files</label>
+              <input type="file" id="uploadFile" accept="application/pdf,.pdf" multiple />
+              <div class="muted">Only PDF and PDF-like MIME types are accepted by the backend.</div>
+            </div>
+            <div class="field">
+              <label for="uploadExternalUuid">External UUID</label>
+              <input type="text" id="uploadExternalUuid" placeholder="Optional; use one file for deterministic external IDs" />
+            </div>
+            <div class="field">
+              <label for="uploadProfile">Profile</label>
+              <select id="uploadProfile">
+                <option value="">No profile</option>
+                {% for profile in profiles %}
+                  <option value="{{ profile.name }}">{{ profile.name }} - {{ profile.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="row">
+              <label class="pill">
+                <input type="checkbox" id="uploadIngest" checked />
+                Start ingestion
+              </label>
+            </div>
+            {% include "dashboard/_docling_options_controls.html" with json_target="uploadOptionsJson" profiles=profiles %}
+            <details class="collapse" open>
+              <summary>
+                <span class="pill">JSON fallback</span>
+                <span class="muted">Unknown compatible keys stay in this payload.</span>
+              </summary>
+              <textarea id="uploadOptionsJson" placeholder='{"max_num_pages": 50}'></textarea>
+            </details>
+            <div class="actions">
+              <button type="button" data-upload-submit>Upload</button>
+              <button type="button" class="ghost" data-upload-clear>Clear</button>
+              <span class="muted" data-upload-status>No upload yet.</span>
+            </div>
+            <pre class="metrics" data-upload-result>No upload yet.</pre>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card">
+        <div class="card-body">
+          <h2 class="card-title">Profile presets</h2>
+          <div class="list">
+            {% for profile in profiles %}
+              <div class="panel dr-profile-card">
+                <div class="row" style="justify-content: space-between;">
+                  <strong>{{ profile.name }}</strong>
+                  <span class="status status-neutral">{{ profile.resource_level }}</span>
+                </div>
+                <div class="muted">{{ profile.description }}</div>
+                <div class="dr-feature-list">
+                  {% if profile.capabilities.ocr %}<span class="status status-ok">ocr</span>{% endif %}
+                  {% if profile.capabilities.table_structure %}<span class="status status-ok">tables</span>{% endif %}
+                  {% if profile.capabilities.parsed_pages %}<span class="status status-ok">parsed pages</span>{% endif %}
+                  {% if profile.capabilities.picture_images %}<span class="status status-ok">figure images</span>{% endif %}
+                  <span class="status status-neutral">vlm_pipeline: false</span>
+                  <span class="status status-neutral">real_chunking: false</span>
+                </div>
+                {% for warning in profile.warnings %}
+                  <div class="status status-warn">{{ warning }}</div>
+                {% endfor %}
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+{% endblock %}

@@ -2,16 +2,20 @@
 
 {% block title %}Document Refinery — Operations{% endblock %}
 
-{% block header_extra %}
-  <div class="card">
-    <div class="page-intro">
-      <h2>Operations</h2>
-      <div class="muted">
-        Staff view for queue health, worker status, system signals, and recent failures.
-        Tenant-facing upload and comparison tools live on <a href="/dashboard/tools/">Tenant tools</a>.
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Operations</div>
+      <h1 class="page-title">Operations</h1>
+      <div class="dr-page-description">
+        Queue health, worker status, system signals, and recent failures. Upload, jobs, comparison, and profile catalog are split into dedicated pages.
       </div>
     </div>
+    <a class="btn btn-outline-primary" href="/dashboard/runtime/">Runtime diagnostics</a>
   </div>
+{% endblock %}
+
+{% block header_extra %}
   <div class="card" style="padding: 16px 18px;">
     <div class="row" style="justify-content: space-between;">
       <div style="min-width: min(420px, 100%); display: grid; gap: 8px;">
@@ -38,9 +42,17 @@
 
 {% block content %}
   <section class="cta-grid">
-    <a class="link-card" href="/dashboard/tools/">
-      <strong>Tenant tools</strong>
-      <span>Upload documents, inspect jobs, and compare profile outputs.</span>
+    <a class="link-card" href="/dashboard/upload/">
+      <strong>Upload PDFs</strong>
+      <span>Start PDF-only Docling ingestion with structured controls.</span>
+    </a>
+    <a class="link-card" href="/dashboard/jobs/">
+      <strong>Jobs</strong>
+      <span>Inspect ingestion state, options, metrics, runtime, and artifacts.</span>
+    </a>
+    <a class="link-card" href="/dashboard/profiles/">
+      <strong>Docling profiles</strong>
+      <span>Review implemented profiles and deferred Docling features.</span>
     </a>
     <a class="link-card" href="/dashboard/webhook-deliveries/">
       <strong>Webhook logs</strong>

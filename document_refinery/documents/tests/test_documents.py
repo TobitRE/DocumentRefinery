@@ -185,6 +185,12 @@ class TestDocumentUpload(TestCase):
         self.assertEqual(response.data["document"]["uuid"], str(existing_doc.uuid))
         self.assertEqual(response.data["latest_job"]["id"], latest_job.id)
         self.assertEqual(response.data["latest_job"]["uuid"], str(latest_job.uuid))
+        self.assertEqual(response.data["latest_job"]["status"], IngestionJobStatus.RUNNING)
+        self.assertEqual(response.data["latest_job"]["stage"], IngestionStage.CONVERTING)
+        self.assertNotIn("options_json", response.data["latest_job"])
+        self.assertNotIn("runtime_json", response.data["latest_job"])
+        self.assertNotIn("worker_hostname", response.data["latest_job"])
+        self.assertNotIn("celery_task_id", response.data["latest_job"])
 
     def test_upload_duplicate_policy_rejects_unknown_value(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
@@ -325,6 +331,77 @@ class TestDocumentUpload(TestCase):
                 format="multipart",
             )
             self.assertEqual(response.status_code, 400)
+
+
+class TestDoclingMetadataAPI(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.tenant = Tenant.objects.create(
+            name="Acme",
+            slug="acme",
+            docling_options_json={"max_num_pages": 9, "future_key": True},
+        )
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        self.raw_key = raw_key
+        self.api_key = APIKey.objects.create(
+            tenant=self.tenant,
+            name="Primary",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=["documents:write"],
+            active=True,
+            docling_options_json={"ocr": True},
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
+
+    def test_profiles_endpoint_returns_backend_catalog(self):
+        response = self.client.get("/v1/docling/profiles/")
+        self.assertEqual(response.status_code, 200)
+        profiles = {item["name"]: item for item in response.data["profiles"]}
+        self.assertIn("fast_text", profiles)
+        self.assertIn("full_vlm", profiles)
+        self.assertFalse(profiles["full_vlm"]["capabilities"]["vlm_pipeline"])
+        self.assertTrue(profiles["full_vlm"]["warnings"])
+
+    def test_capabilities_endpoint_marks_planned_features(self):
+        response = self.client.get("/v1/docling/capabilities/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["input_formats"]["implemented"], ["pdf"])
+        self.assertIn("multi_format_upload", response.data["features"]["planned"])
+        self.assertIn("real_chunking", response.data["features"]["planned"])
+        self.assertIn("vlm_pipeline", response.data["features"]["planned"])
+
+    def test_options_resolve_merges_layers_and_warns_unknown_keys(self):
+        response = self.client.post(
+            "/v1/docling/options/resolve/",
+            {
+                "profile": "fast_text",
+                "options_json": {"ocr_languages": ["de"], "max_file_size": 2048},
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        effective = response.data["effective_options"]
+        self.assertEqual(effective["max_num_pages"], 9)
+        self.assertEqual(effective["max_file_size"], 2048)
+        self.assertFalse(effective["do_ocr"])
+        self.assertEqual(effective["exports"], ["text", "markdown", "doctags"])
+        self.assertEqual(effective["ocr_options"]["lang"], ["de"])
+        self.assertTrue(any("future_key" in warning for warning in response.data["warnings"]))
+
+    def test_docling_metadata_endpoints_require_allowed_scope(self):
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        APIKey.objects.create(
+            tenant=self.tenant,
+            name="ReadOnly",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=["documents:read"],
+            active=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {raw_key}")
+        response = self.client.get("/v1/docling/profiles/")
+        self.assertEqual(response.status_code, 403)
 
 
 class TestDocumentScope(TestCase):
@@ -594,6 +671,10 @@ class TestDocumentIngestByUUID(TestCase):
         doc.save(update_fields=["storage_relpath_quarantine"])
         return doc
 
+    def _grant_retry_scope(self):
+        self.api_key.scopes = ["documents:write", "jobs:read", "jobs:write"]
+        self.api_key.save(update_fields=["scopes"])
+
     def test_ingest_by_uuid_create_new_requires_documents_write(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = self._make_document_with_clean(tmpdir)
@@ -707,6 +788,38 @@ class TestDocumentIngestByUUID(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["reused"])
         self.assertEqual(response.data["job_id"], job.id)
+        self.assertEqual(response.data["job"]["id"], job.id)
+        self.assertEqual(response.data["job"]["uuid"], str(job.uuid))
+        self.assertEqual(response.data["job"]["status"], IngestionJobStatus.SUCCEEDED)
+        self.assertEqual(response.data["job"]["stage"], IngestionStage.FINALIZING)
+        self.assertNotIn("options_json", response.data["job"])
+        self.assertNotIn("runtime_json", response.data["job"])
+        self.assertNotIn("worker_hostname", response.data["job"])
+        self.assertNotIn("celery_task_id", response.data["job"])
+        start_mock.assert_not_called()
+
+    def test_ingest_by_uuid_reuse_existing_matches_legacy_profile_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.SUCCEEDED,
+                stage=IngestionStage.FINALIZING,
+                profile="fast_text",
+                options_json={"exports": ["text", "markdown", "doctags"]},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing", "profile": "fast_text"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["reused"])
+        self.assertEqual(response.data["job_id"], job.id)
         start_mock.assert_not_called()
 
     def test_ingest_by_uuid_reuse_existing_creates_job_when_no_match(self):
@@ -724,6 +837,7 @@ class TestDocumentIngestByUUID(TestCase):
         self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 1)
 
     def test_ingest_by_uuid_retry_failed_requeues_retryable_job(self):
+        self._grant_retry_scope()
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = self._make_document_with_clean(tmpdir)
             job = IngestionJob.objects.create(
@@ -755,7 +869,62 @@ class TestDocumentIngestByUUID(TestCase):
             self.assertTrue(os.path.exists(os.path.join(tmpdir, job.source_relpath)))
             start_mock.assert_called_once_with(job.id)
 
+    def test_ingest_by_uuid_retry_failed_matches_legacy_profile_options(self):
+        self._grant_retry_scope()
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=1,
+                max_retries=3,
+                profile="fast_text",
+                options_json={"exports": ["text", "markdown", "doctags"]},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "retry_failed", "profile": "fast_text"},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data["retried"])
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.QUEUED)
+            start_mock.assert_called_once_with(job.id)
+
+    def test_ingest_by_uuid_retry_failed_requires_jobs_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=1,
+                max_retries=3,
+                options_json={},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "retry_failed"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 403)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJobStatus.FAILED)
+        self.assertEqual(job.attempt, 1)
+        start_mock.assert_not_called()
+
     def test_ingest_by_uuid_retry_failed_respects_retry_limit(self):
+        self._grant_retry_scope()
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = self._make_document_with_clean(tmpdir)
             IngestionJob.objects.create(
@@ -780,6 +949,7 @@ class TestDocumentIngestByUUID(TestCase):
         start_mock.assert_not_called()
 
     def test_ingest_by_uuid_retry_failed_no_retryable_job_returns_400(self):
+        self._grant_retry_scope()
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = self._make_document_with_clean(tmpdir)
             response = self.client.post(

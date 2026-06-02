@@ -1,5 +1,7 @@
 import os
+import json
 import tempfile
+import zipfile
 
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -139,4 +141,142 @@ class TestArtifactAccess(TestCase):
             )
             self._auth(self.raw_key_other)
             response = self.client.get(f"/v1/artifacts/{artifact.id}/")
+            self.assertEqual(response.status_code, 404)
+
+    def test_text_preview_returns_limited_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "doc.txt")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(b"hello preview")
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.TEXT,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=13,
+                content_type="text/plain",
+            )
+            self._auth(self.raw_key)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["preview_type"], "text")
+            self.assertEqual(response.data["text"], "hello preview")
+            self.assertFalse(response.data["truncated"])
+
+    def test_json_preview_parses_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "doc.json")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(json.dumps({"pages": 1}).encode("utf-8"))
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.DOCLING_JSON,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=12,
+                content_type="application/json",
+            )
+            self._auth(self.raw_key)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["preview_type"], "json")
+            self.assertEqual(response.data["json"], {"pages": 1})
+
+    def test_chunks_preview_marks_compatibility_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "chunks.json")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(json.dumps({"format": "doctags", "content": "x"}).encode("utf-8"))
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.CHUNKS_JSON,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=36,
+                content_type="application/json",
+            )
+            self._auth(self.raw_key)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["preview_type"], "json")
+            self.assertIn("not real chunking", response.data["compatibility_note"])
+
+    def test_zip_preview_returns_metadata_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "figures.zip")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with zipfile.ZipFile(abs_path, "w") as archive:
+                archive.writestr("figure_1.png", b"fake")
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.FIGURES_ZIP,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=os.path.getsize(abs_path),
+                content_type="application/zip",
+            )
+            self._auth(self.raw_key)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["preview_type"], "zip_metadata")
+            self.assertEqual(response.data["entry_count"], 1)
+            self.assertEqual(response.data["entries"][0]["filename"], "figure_1.png")
+
+    def test_preview_truncates_large_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "large.txt")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(b"a" * (256 * 1024 + 10))
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.TEXT,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=256 * 1024 + 10,
+                content_type="text/plain",
+            )
+            self._auth(self.raw_key)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data["truncated"])
+            self.assertEqual(len(response.data["text"]), 256 * 1024)
+
+    def test_preview_wrong_tenant_returns_404(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "doc.txt")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(b"hello")
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.TEXT,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=5,
+                content_type="text/plain",
+            )
+            self._auth(self.raw_key_other)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
             self.assertEqual(response.status_code, 404)
