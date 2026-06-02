@@ -30,6 +30,11 @@ class DocumentUploadSerializer(serializers.Serializer):
     options_json = serializers.JSONField(required=False)
     external_uuid = serializers.UUIDField(required=False)
     profile = serializers.ChoiceField(choices=PROFILE_NAMES, required=False)
+    duplicate_policy = serializers.ChoiceField(
+        choices=("conflict", "return_existing"),
+        required=False,
+        default="conflict",
+    )
 
 
 class DocumentCompareSerializer(serializers.Serializer):
@@ -37,6 +42,16 @@ class DocumentCompareSerializer(serializers.Serializer):
         child=serializers.ChoiceField(choices=PROFILE_NAMES), allow_empty=False
     )
     options_json = serializers.JSONField(required=False)
+
+
+class DocumentIngestSerializer(serializers.Serializer):
+    profile = serializers.ChoiceField(choices=PROFILE_NAMES, required=False)
+    options_json = serializers.JSONField(required=False)
+    mode = serializers.ChoiceField(
+        choices=("reuse_existing", "retry_failed", "create_new"),
+        required=False,
+        default="reuse_existing",
+    )
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
@@ -61,6 +76,7 @@ class JobSerializer(serializers.ModelSerializer):
         model = IngestionJob
         fields = (
             "id",
+            "uuid",
             "document_id",
             "external_uuid",
             "profile",

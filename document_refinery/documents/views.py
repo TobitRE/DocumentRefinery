@@ -32,6 +32,7 @@ from .serializers import (
     ArtifactSerializer,
     DocumentSerializer,
     DocumentCompareSerializer,
+    DocumentIngestSerializer,
     DocumentUploadSerializer,
     JobSerializer,
     WebhookEndpointSerializer,
@@ -64,6 +65,151 @@ def _queue_unavailable_response():
             "message": "Ingestion queue is unavailable. Please retry later.",
         },
         status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+def _latest_job_for_document(document: Document) -> IngestionJob | None:
+    return (
+        IngestionJob.objects.filter(tenant=document.tenant, document=document)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
+def _duplicate_location(request, document: Document) -> str:
+    return request.build_absolute_uri(f"{request.path.rstrip('/')}/{document.id}/")
+
+
+def _duplicate_document_payload(document: Document) -> dict[str, object]:
+    latest_job = _latest_job_for_document(document)
+    return {
+        "error_code": "DUPLICATE_DOCUMENT",
+        "message": "Document already exists.",
+        "duplicate": True,
+        "document_id": document.id,
+        "document_uuid": str(document.uuid),
+        "sha256": document.sha256,
+        "latest_job_id": latest_job.id if latest_job else None,
+        "latest_job_uuid": str(latest_job.uuid) if latest_job else None,
+        "latest_job_status": latest_job.status if latest_job else None,
+    }
+
+
+def _duplicate_document_response(document: Document, request, duplicate_policy: str) -> Response:
+    latest_job = _latest_job_for_document(document)
+    if duplicate_policy == "return_existing":
+        response = Response(
+            {
+                "duplicate": True,
+                "document": DocumentSerializer(document).data,
+                "latest_job": JobSerializer(latest_job).data if latest_job else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+    else:
+        response = Response(
+            _duplicate_document_payload(document),
+            status=status.HTTP_409_CONFLICT,
+        )
+    response["Location"] = _duplicate_location(request, document)
+    return response
+
+
+def _build_ingestion_options(api_key, options_json, profile: str | None) -> dict:
+    resolved = (
+        options_json
+        or api_key.docling_options_json
+        or getattr(api_key.tenant, "docling_options_json", None)
+        or settings.DOC_DEFAULT_OPTIONS
+        or {}
+    )
+    resolved = apply_profile_to_options(resolved, profile)
+    validate_docling_options(resolved)
+    return resolved or {}
+
+
+def _resolve_document_source_abs(document: Document) -> str:
+    clean_path = document.get_clean_path()
+    if clean_path and os.path.exists(clean_path):
+        return clean_path
+    quarantine_path = document.get_quarantine_path()
+    if quarantine_path and os.path.exists(quarantine_path):
+        return quarantine_path
+    return ""
+
+
+def _copy_document_source_for_job(document: Document) -> tuple[str, str] | None:
+    source_abs = _resolve_document_source_abs(document)
+    if not source_abs:
+        return None
+    relpath = os.path.join(
+        "uploads",
+        "quarantine",
+        str(document.tenant_id),
+        f"{document.uuid}-{uuid.uuid4()}.pdf",
+    )
+    abs_path = os.path.join(settings.DATA_ROOT, relpath)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    shutil.copy2(source_abs, abs_path)
+    return relpath, abs_path
+
+
+def _create_ingestion_job(
+    api_key,
+    document: Document,
+    *,
+    options_json: dict,
+    profile: str | None,
+    source_relpath: str = "",
+) -> IngestionJob:
+    return IngestionJob.objects.create(
+        tenant=api_key.tenant,
+        created_by_key=api_key,
+        document=document,
+        external_uuid=document.external_uuid,
+        profile=profile,
+        source_relpath=source_relpath,
+        status=IngestionJobStatus.QUEUED,
+        stage=IngestionStage.SCANNING,
+        queued_at=timezone.now(),
+        options_json=options_json or {},
+    )
+
+
+def _ingest_job_payload(
+    document: Document,
+    job: IngestionJob,
+    *,
+    mode: str,
+    created: bool,
+    reused: bool = False,
+    retried: bool = False,
+) -> dict[str, object]:
+    return {
+        "mode": mode,
+        "created": created,
+        "reused": reused,
+        "retried": retried,
+        "document": DocumentSerializer(document).data,
+        "job": JobSerializer(job).data,
+        "job_id": job.id,
+        "job_uuid": str(job.uuid),
+    }
+
+
+def _matching_jobs(document: Document, profile: str | None, options_json: dict):
+    return IngestionJob.objects.filter(
+        tenant=document.tenant,
+        document=document,
+        profile=profile,
+        options_json=options_json or {},
+    ).order_by("-created_at", "-id")
+
+
+def _missing_source_response() -> Response:
+    return Response(
+        {"error_code": "MISSING_SOURCE_FILE", "message": "Document file is missing."},
+        status=status.HTTP_400_BAD_REQUEST,
     )
 
 
@@ -180,6 +326,7 @@ def _retry_snapshot(job: IngestionJob) -> dict[str, object]:
         "chunk_ms": job.chunk_ms,
         "celery_task_id": job.celery_task_id,
         "worker_hostname": job.worker_hostname,
+        "source_relpath": job.source_relpath,
     }
 
 
@@ -187,6 +334,66 @@ def _restore_retry_snapshot(job: IngestionJob, snapshot: dict[str, object]) -> N
     for field, value in snapshot.items():
         setattr(job, field, value)
     job.save(update_fields=list(snapshot.keys()))
+
+
+def _retry_job(
+    job: IngestionJob,
+    *,
+    source_relpath: str | None = None,
+    source_abs_path: str | None = None,
+) -> Response:
+    if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
+        if source_abs_path:
+            _safe_remove_file(source_abs_path)
+        return Response(
+            {"error_code": "NOT_RETRYABLE", "message": "Job cannot be retried."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if job.attempt >= job.max_retries:
+        if source_abs_path:
+            _safe_remove_file(source_abs_path)
+        return Response(
+            {"error_code": "RETRY_LIMIT", "message": "Retry limit reached."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    snapshot = _retry_snapshot(job)
+    prev_status = job.status
+    prev_stage = job.stage
+    stashed_artifacts = []
+    try:
+        stashed_artifacts = _stash_job_artifacts_for_retry(job)
+        if source_relpath is not None:
+            job.source_relpath = source_relpath
+        job.attempt += 1
+        job.status = IngestionJobStatus.QUEUED
+        job.stage = IngestionStage.SCANNING
+        job.error_code = ""
+        job.error_message = ""
+        job.error_details_json = None
+        job.queued_at = timezone.now()
+        job.started_at = None
+        job.finished_at = None
+        job.duration_ms = None
+        job.scan_ms = None
+        job.convert_ms = None
+        job.export_ms = None
+        job.chunk_ms = None
+        job.celery_task_id = ""
+        job.save()
+        start_ingestion_pipeline(job.id)
+    except Exception:
+        _restore_retry_snapshot(job, snapshot)
+        _restore_stashed_artifacts(stashed_artifacts)
+        if source_abs_path:
+            _safe_remove_file(source_abs_path)
+        return _queue_unavailable_response()
+
+    _discard_stashed_artifacts(stashed_artifacts)
+    job.refresh_from_db()
+    if job.status == IngestionJobStatus.QUEUED and job.stage == IngestionStage.SCANNING:
+        queue_job_webhooks(job, prev_status, prev_stage)
+    return Response(JobSerializer(job).data)
 
 
 class DocumentViewSet(
@@ -202,7 +409,7 @@ class DocumentViewSet(
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
             self.required_scopes = ["documents:read"]
-        elif self.action in ("create", "compare"):
+        elif self.action in ("create", "compare", "ingest_by_uuid"):
             self.required_scopes = ["documents:write"]
         else:
             self.required_scopes = []
@@ -221,6 +428,7 @@ class DocumentViewSet(
         options_json = serializer.validated_data.get("options_json", None)
         external_uuid = serializer.validated_data.get("external_uuid", None)
         profile = serializer.validated_data.get("profile", None)
+        duplicate_policy = serializer.validated_data.get("duplicate_policy", "conflict")
 
         content_type = (uploaded.content_type or "").strip().lower()
         api_key = request.auth
@@ -293,35 +501,25 @@ class DocumentViewSet(
         doc.sha256 = hasher.hexdigest()
         doc.size_bytes = size_bytes
         doc.storage_relpath_quarantine = relpath
-        if Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).exists():
+        existing_doc = Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).first()
+        if existing_doc:
             if os.path.exists(abs_path):
                 os.remove(abs_path)
-            return Response(
-                {"error_code": "DUPLICATE_DOCUMENT", "message": "Document already exists."},
-                status=status.HTTP_409_CONFLICT,
-            )
+            return _duplicate_document_response(existing_doc, request, duplicate_policy)
         try:
             doc.save()
         except IntegrityError:
             if os.path.exists(abs_path):
                 os.remove(abs_path)
-            return Response(
-                {"error_code": "DUPLICATE_DOCUMENT", "message": "Document already exists."},
-                status=status.HTTP_409_CONFLICT,
-            )
+            existing_doc = Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).first()
+            if existing_doc:
+                return _duplicate_document_response(existing_doc, request, duplicate_policy)
+            raise
 
         job_id = None
         if ingest:
-            options_json = (
-                options_json
-                or api_key.docling_options_json
-                or getattr(api_key.tenant, "docling_options_json", None)
-                or settings.DOC_DEFAULT_OPTIONS
-                or {}
-            )
-            options_json = apply_profile_to_options(options_json, profile)
             try:
-                validate_docling_options(options_json)
+                options_json = _build_ingestion_options(api_key, options_json, profile)
             except ValidationError as exc:
                 quarantine_path = doc.get_quarantine_path()
                 if quarantine_path and os.path.exists(quarantine_path):
@@ -332,16 +530,11 @@ class DocumentViewSet(
                     {"error_code": "INVALID_OPTIONS", "message": message},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            job = IngestionJob.objects.create(
-                tenant=api_key.tenant,
-                created_by_key=api_key,
-                document=doc,
-                external_uuid=doc.external_uuid,
+            job = _create_ingestion_job(
+                api_key,
+                doc,
+                options_json=options_json,
                 profile=profile,
-                status=IngestionJobStatus.QUEUED,
-                stage=IngestionStage.SCANNING,
-                queued_at=timezone.now(),
-                options_json=options_json or {},
             )
             job_id = job.id
             try:
@@ -356,6 +549,118 @@ class DocumentViewSet(
         if job_id:
             payload["job_id"] = job_id
         return Response(payload, status=status.HTTP_201_CREATED)
+
+    def ingest_by_uuid(self, request, document_uuid=None):
+        serializer = DocumentIngestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        document = Document.objects.filter(
+            tenant=request.auth.tenant,
+            uuid=document_uuid,
+        ).first()
+        if not document:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        profile = serializer.validated_data.get("profile", None)
+        mode = serializer.validated_data.get("mode", "reuse_existing")
+        try:
+            options_json = _build_ingestion_options(
+                request.auth,
+                serializer.validated_data.get("options_json", None),
+                profile,
+            )
+        except ValidationError as exc:
+            message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+            return Response(
+                {"error_code": "INVALID_OPTIONS", "message": message},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        jobs = _matching_jobs(document, profile, options_json)
+
+        if mode == "reuse_existing":
+            existing_job = jobs.filter(
+                status__in=(
+                    IngestionJobStatus.QUEUED,
+                    IngestionJobStatus.RUNNING,
+                    IngestionJobStatus.SUCCEEDED,
+                )
+            ).first()
+            if existing_job:
+                return Response(
+                    _ingest_job_payload(
+                        document,
+                        existing_job,
+                        mode=mode,
+                        created=False,
+                        reused=True,
+                    ),
+                    status=status.HTTP_200_OK,
+                )
+
+        if mode == "retry_failed":
+            retry_job = jobs.filter(
+                status__in=(IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED)
+            ).first()
+            if not retry_job:
+                return Response(
+                    {
+                        "error_code": "NOT_RETRYABLE",
+                        "message": "No retryable job exists for this document and options.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if retry_job.attempt >= retry_job.max_retries:
+                return _retry_job(retry_job)
+            source = _copy_document_source_for_job(document)
+            if not source:
+                return _missing_source_response()
+            retry_response = _retry_job(
+                retry_job,
+                source_relpath=source[0],
+                source_abs_path=source[1],
+            )
+            if retry_response.status_code != status.HTTP_200_OK:
+                return retry_response
+            retry_job.refresh_from_db()
+            return Response(
+                _ingest_job_payload(
+                    document,
+                    retry_job,
+                    mode=mode,
+                    created=False,
+                    retried=True,
+                ),
+                status=status.HTTP_200_OK,
+            )
+
+        source = _copy_document_source_for_job(document)
+        if not source:
+            return _missing_source_response()
+        source_relpath, source_abs_path = source
+        job = _create_ingestion_job(
+            request.auth,
+            document,
+            options_json=options_json,
+            profile=profile,
+            source_relpath=source_relpath,
+        )
+        try:
+            start_ingestion_pipeline(job.id)
+        except Exception:
+            job.delete()
+            _safe_remove_file(source_abs_path)
+            return _queue_unavailable_response()
+
+        return Response(
+            _ingest_job_payload(
+                document,
+                job,
+                mode=mode,
+                created=True,
+            ),
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["post"], url_path="compare")
     def compare(self, request, pk=None):
@@ -632,49 +937,7 @@ class JobViewSet(
     @action(detail=True, methods=["post"], url_path="retry")
     def retry(self, request, pk=None):
         job = self.get_object()
-        if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
-            return Response(
-                {"error_code": "NOT_RETRYABLE", "message": "Job cannot be retried."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if job.attempt >= job.max_retries:
-            return Response(
-                {"error_code": "RETRY_LIMIT", "message": "Retry limit reached."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        snapshot = _retry_snapshot(job)
-        prev_status = job.status
-        prev_stage = job.stage
-        stashed_artifacts = []
-        try:
-            stashed_artifacts = _stash_job_artifacts_for_retry(job)
-            job.attempt += 1
-            job.status = IngestionJobStatus.QUEUED
-            job.stage = IngestionStage.SCANNING
-            job.error_code = ""
-            job.error_message = ""
-            job.error_details_json = None
-            job.queued_at = timezone.now()
-            job.started_at = None
-            job.finished_at = None
-            job.duration_ms = None
-            job.scan_ms = None
-            job.convert_ms = None
-            job.export_ms = None
-            job.chunk_ms = None
-            job.save()
-            start_ingestion_pipeline(job.id)
-        except Exception:
-            _restore_retry_snapshot(job, snapshot)
-            _restore_stashed_artifacts(stashed_artifacts)
-            return _queue_unavailable_response()
-
-        _discard_stashed_artifacts(stashed_artifacts)
-        job.refresh_from_db()
-        if job.status == IngestionJobStatus.QUEUED and job.stage == IngestionStage.SCANNING:
-            queue_job_webhooks(job, prev_status, prev_stage)
-        return Response(JobSerializer(job).data)
+        return _retry_job(job)
 
 
 class WebhookEndpointViewSet(

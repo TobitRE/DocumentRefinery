@@ -1,8 +1,10 @@
 import hashlib
 import os
 import tempfile
+import uuid
 from unittest.mock import patch
 
+from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -116,20 +118,121 @@ class TestDocumentUpload(TestCase):
     def test_upload_rejects_duplicate(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
         existing_hash = hashlib.sha256(content).hexdigest()
-        Document.objects.create(
+        api_key = APIKey.objects.get(tenant=self.tenant)
+        existing_doc = Document.objects.create(
             tenant=self.tenant,
-            created_by_key=APIKey.objects.get(tenant=self.tenant),
+            created_by_key=api_key,
             original_filename="existing.pdf",
             sha256=existing_hash,
             mime_type="application/pdf",
             size_bytes=len(content),
             storage_relpath_quarantine="uploads/quarantine/existing.pdf",
         )
+        latest_job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=api_key,
+            document=existing_doc,
+            status=IngestionJobStatus.SUCCEEDED,
+            stage=IngestionStage.FINALIZING,
+        )
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             self._auth()
             upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
             response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.data["error_code"], "DUPLICATE_DOCUMENT")
+            self.assertTrue(response.data["duplicate"])
+            self.assertEqual(response.data["document_id"], existing_doc.id)
+            self.assertEqual(response.data["document_uuid"], str(existing_doc.uuid))
+            self.assertEqual(response.data["sha256"], existing_hash)
+            self.assertEqual(response.data["latest_job_id"], latest_job.id)
+            self.assertEqual(response.data["latest_job_uuid"], str(latest_job.uuid))
+            self.assertEqual(response.data["latest_job_status"], IngestionJobStatus.SUCCEEDED)
+            self.assertIn(f"/v1/documents/{existing_doc.id}/", response["Location"])
+
+    def test_upload_duplicate_policy_return_existing_returns_200(self):
+        content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
+        existing_hash = hashlib.sha256(content).hexdigest()
+        api_key = APIKey.objects.get(tenant=self.tenant)
+        existing_doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=api_key,
+            original_filename="existing.pdf",
+            sha256=existing_hash,
+            mime_type="application/pdf",
+            size_bytes=len(content),
+            storage_relpath_quarantine="uploads/quarantine/existing.pdf",
+        )
+        latest_job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=api_key,
+            document=existing_doc,
+            status=IngestionJobStatus.RUNNING,
+            stage=IngestionStage.CONVERTING,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            response = self.client.post(
+                "/v1/documents/",
+                {"file": upload, "duplicate_policy": "return_existing"},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["duplicate"])
+        self.assertEqual(response.data["document"]["id"], existing_doc.id)
+        self.assertEqual(response.data["document"]["uuid"], str(existing_doc.uuid))
+        self.assertEqual(response.data["latest_job"]["id"], latest_job.id)
+        self.assertEqual(response.data["latest_job"]["uuid"], str(latest_job.uuid))
+
+    def test_upload_duplicate_policy_rejects_unknown_value(self):
+        content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            response = self.client.post(
+                "/v1/documents/",
+                {"file": upload, "duplicate_policy": "overwrite"},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_upload_duplicate_integrity_error_returns_existing_document_payload(self):
+        content = b"%PDF-1.4\n%race\n1 0 obj\n<<>>\nendobj\n"
+        existing_hash = hashlib.sha256(content).hexdigest()
+        api_key = APIKey.objects.get(tenant=self.tenant)
+        original_save = Document.save
+        created = {}
+
+        def save_with_concurrent_duplicate(instance, *args, **kwargs):
+            if instance.sha256 == existing_hash and "doc" not in created:
+                existing_doc = Document(
+                    tenant=self.tenant,
+                    created_by_key=api_key,
+                    original_filename="existing.pdf",
+                    sha256=existing_hash,
+                    mime_type="application/pdf",
+                    size_bytes=len(content),
+                    storage_relpath_quarantine="uploads/quarantine/existing.pdf",
+                )
+                original_save(existing_doc)
+                created["doc"] = existing_doc
+                raise IntegrityError("duplicate")
+            return original_save(instance, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            with patch("documents.views.Document.save", save_with_concurrent_duplicate):
+                response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(response.data["duplicate"])
+        self.assertEqual(response.data["document_id"], created["doc"].id)
+        self.assertEqual(response.data["document_uuid"], str(created["doc"].uuid))
+        self.assertEqual(Document.objects.count(), 1)
 
     def test_upload_rejects_invalid_options(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
@@ -412,3 +515,318 @@ class TestDocumentCompare(TestCase):
             for root, _dirs, files in os.walk(os.path.join(tmpdir, compare_upload_dir)):
                 compare_paths.extend(files)
             self.assertEqual(len(compare_paths), 1)
+
+
+class TestDocumentIngestByUUID(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.tenant = Tenant.objects.create(name="Acme", slug="acme")
+        self.other_tenant = Tenant.objects.create(name="Other", slug="other")
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        self.raw_key = raw_key
+        self.api_key = APIKey.objects.create(
+            tenant=self.tenant,
+            name="Primary",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=["documents:write", "jobs:read"],
+            active=True,
+        )
+        raw_jobs_key, jobs_prefix, jobs_hash = APIKey.generate_key()
+        self.raw_jobs_key = raw_jobs_key
+        APIKey.objects.create(
+            tenant=self.tenant,
+            name="JobsOnly",
+            prefix=jobs_prefix,
+            key_hash=jobs_hash,
+            scopes=["jobs:write"],
+            active=True,
+        )
+        raw_other_key, other_prefix, other_hash = APIKey.generate_key()
+        self.raw_other_key = raw_other_key
+        self.other_api_key = APIKey.objects.create(
+            tenant=self.other_tenant,
+            name="OtherPrimary",
+            prefix=other_prefix,
+            key_hash=other_hash,
+            scopes=["documents:write"],
+            active=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
+
+    def _make_document_with_clean(self, tmpdir, tenant=None, api_key=None):
+        tenant = tenant or self.tenant
+        api_key = api_key or self.api_key
+        doc = Document.objects.create(
+            tenant=tenant,
+            created_by_key=api_key,
+            original_filename="sample.pdf",
+            sha256=hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest(),
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine=f"uploads/quarantine/{tenant.id}/missing.pdf",
+        )
+        clean_relpath = os.path.join("uploads", "clean", str(tenant.id), f"{doc.uuid}.pdf")
+        clean_abs = os.path.join(tmpdir, clean_relpath)
+        os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+        with open(clean_abs, "wb") as handle:
+            handle.write(b"%PDF-1.4 clean source\n")
+        doc.storage_relpath_clean = clean_relpath
+        doc.save(update_fields=["storage_relpath_clean"])
+        return doc
+
+    def _make_document_with_quarantine(self, tmpdir):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256=hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest(),
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="pending",
+        )
+        relpath = os.path.join("uploads", "quarantine", str(self.tenant.id), f"{doc.uuid}.pdf")
+        abs_path = os.path.join(tmpdir, relpath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        with open(abs_path, "wb") as handle:
+            handle.write(b"%PDF-1.4 quarantine source\n")
+        doc.storage_relpath_quarantine = relpath
+        doc.save(update_fields=["storage_relpath_quarantine"])
+        return doc
+
+    def test_ingest_by_uuid_create_new_requires_documents_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_jobs_key}")
+            response = self.client.post(
+                f"/v1/documents/{doc.uuid}/ingest/",
+                {"mode": "create_new"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_ingest_by_uuid_foreign_document_returns_404(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_other_key}")
+            response = self.client.post(
+                f"/v1/documents/{doc.uuid}/ingest/",
+                {"mode": "create_new"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_ingest_by_uuid_missing_document_returns_404(self):
+        response = self.client.post(
+            f"/v1/documents/{uuid.uuid4()}/ingest/",
+            {"mode": "create_new"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_ingest_by_uuid_create_new_copies_clean_source_and_sets_source_relpath(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "create_new", "profile": "fast_text"},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 201)
+            job = IngestionJob.objects.get(pk=response.data["job_id"])
+            start_mock.assert_called_once_with(job.id)
+            self.assertTrue(job.source_relpath)
+            self.assertNotEqual(job.source_relpath, doc.storage_relpath_clean)
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, job.source_relpath)))
+            self.assertEqual(job.profile, "fast_text")
+            self.assertEqual(job.options_json.get("exports"), ["text", "markdown", "doctags"])
+
+    def test_ingest_by_uuid_create_new_copies_quarantine_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_quarantine(tmpdir)
+            with patch("documents.views.start_ingestion_pipeline"):
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "create_new"},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 201)
+            job = IngestionJob.objects.get(pk=response.data["job_id"])
+            self.assertTrue(job.source_relpath)
+            self.assertNotEqual(job.source_relpath, doc.storage_relpath_quarantine)
+            with open(os.path.join(tmpdir, job.source_relpath), "rb") as handle:
+                self.assertEqual(handle.read(), b"%PDF-1.4 quarantine source\n")
+
+    def test_ingest_by_uuid_reuse_existing_returns_active_job_without_new_job(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.RUNNING,
+                stage=IngestionStage.CONVERTING,
+                options_json={},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["reused"])
+        self.assertEqual(response.data["job_id"], job.id)
+        self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 1)
+        start_mock.assert_not_called()
+
+    def test_ingest_by_uuid_reuse_existing_returns_succeeded_job_without_new_job(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.SUCCEEDED,
+                stage=IngestionStage.FINALIZING,
+                options_json={},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["reused"])
+        self.assertEqual(response.data["job_id"], job.id)
+        start_mock.assert_not_called()
+
+    def test_ingest_by_uuid_reuse_existing_creates_job_when_no_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            with patch("documents.views.start_ingestion_pipeline"):
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["created"])
+        self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 1)
+
+    def test_ingest_by_uuid_retry_failed_requeues_retryable_job(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=1,
+                max_retries=3,
+                error_code="DOCLING_CONVERT_FAILED",
+                error_message="conversion failed",
+                options_json={},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "retry_failed"},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data["retried"])
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.QUEUED)
+            self.assertEqual(job.stage, IngestionStage.SCANNING)
+            self.assertEqual(job.attempt, 2)
+            self.assertTrue(job.source_relpath)
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, job.source_relpath)))
+            start_mock.assert_called_once_with(job.id)
+
+    def test_ingest_by_uuid_retry_failed_respects_retry_limit(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=3,
+                max_retries=3,
+                options_json={},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "retry_failed"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error_code"], "RETRY_LIMIT")
+        start_mock.assert_not_called()
+
+    def test_ingest_by_uuid_retry_failed_no_retryable_job_returns_400(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            response = self.client.post(
+                f"/v1/documents/{doc.uuid}/ingest/",
+                {"mode": "retry_failed"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error_code"], "NOT_RETRYABLE")
+
+    def test_ingest_by_uuid_validates_profile_and_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            profile_response = self.client.post(
+                f"/v1/documents/{doc.uuid}/ingest/",
+                {"mode": "create_new", "profile": "unknown"},
+                format="json",
+            )
+            options_response = self.client.post(
+                f"/v1/documents/{doc.uuid}/ingest/",
+                {"mode": "create_new", "options_json": {"max_num_pages": "ten"}},
+                format="json",
+            )
+
+        self.assertEqual(profile_response.status_code, 400)
+        self.assertEqual(options_response.status_code, 400)
+        self.assertEqual(options_response.data["error_code"], "INVALID_OPTIONS")
+
+    def test_ingest_by_uuid_queue_failure_rolls_back_job_and_source_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            with patch(
+                "documents.views.start_ingestion_pipeline",
+                side_effect=RuntimeError("broker down"),
+            ):
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "create_new"},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 0)
+            quarantine_dir = os.path.join(tmpdir, "uploads", "quarantine", str(self.tenant.id))
+            copied_files = []
+            if os.path.exists(quarantine_dir):
+                for _root, _dirs, files in os.walk(quarantine_dir):
+                    copied_files.extend(files)
+            self.assertEqual(copied_files, [])

@@ -39,7 +39,7 @@ Upload policy per API key:
 ### Scopes
 
 - `documents:read` — list/retrieve documents
-- `documents:write` — upload documents
+- `documents:write` — upload documents and start ingestion for owned documents
 - `artifacts:read` — list/download artifacts
 - `jobs:read` — list/retrieve jobs
 - `jobs:write` — cancel/retry jobs
@@ -61,6 +61,7 @@ Multipart fields:
 - `options_json` (optional) — Docling options JSON
 - `profile` (optional) — extraction profile name
 - `external_uuid` (optional, UUID) — your correlation ID, echoed on documents and jobs
+- `duplicate_policy` (optional) — `conflict` (default) or `return_existing`
 
 Constraints:
 - Request `Content-Type` must be allowed by the API key allowlist.
@@ -142,6 +143,7 @@ with open("/path/to/file.pdf", "rb") as f:
         files={"file": f},
         data={
             "ingest": "true",
+            "duplicate_policy": "return_existing",
             "options_json": json.dumps({
                 "exports": ["markdown", "text", "doctags"],
                 "max_num_pages": 50,
@@ -149,7 +151,15 @@ with open("/path/to/file.pdf", "rb") as f:
         },
         timeout=60,
     )
-resp.raise_for_status()
+
+if resp.status_code == 409:
+    payload = resp.json()
+    if payload.get("error_code") == "DUPLICATE_DOCUMENT":
+        print("Document already exists:", payload["document_uuid"])
+    else:
+        resp.raise_for_status()
+else:
+    resp.raise_for_status()
 payload = resp.json()
 print(payload)
 ```
@@ -157,6 +167,58 @@ print(payload)
 Response fields include:
 - `id`, `uuid`, `external_uuid`, `original_filename`, `sha256`, `size_bytes`, `status`, `created_at`
 - `job_id` when `ingest=true`
+
+### Duplicate uploads
+
+Documents are deduplicated per tenant by SHA-256. By default, uploading the same
+PDF again returns `409 DUPLICATE_DOCUMENT` for backward compatibility. The error
+payload includes the existing document and latest tenant-local job summary:
+
+```json
+{
+  "error_code": "DUPLICATE_DOCUMENT",
+  "message": "Document already exists.",
+  "duplicate": true,
+  "document_id": 123,
+  "document_uuid": "7c86f0fd-9de2-41ad-b0df-5ef5d221a35d",
+  "sha256": "9e0f...",
+  "latest_job_id": 456,
+  "latest_job_uuid": "d677e8f8-6e96-4c88-a126-61ff0d753910",
+  "latest_job_status": "SUCCEEDED"
+}
+```
+
+The response also includes a `Location` header pointing at the existing document.
+Integrations that use `raise_for_status()` should either handle this 409 before
+raising, or send `duplicate_policy=return_existing`.
+
+With `duplicate_policy=return_existing`, duplicate uploads return `200 OK`:
+
+```json
+{
+  "duplicate": true,
+  "document": {
+    "id": 123,
+    "uuid": "7c86f0fd-9de2-41ad-b0df-5ef5d221a35d",
+    "external_uuid": null,
+    "original_filename": "contract.pdf",
+    "sha256": "9e0f...",
+    "mime_type": "application/pdf",
+    "size_bytes": 1048576,
+    "status": "CLEAN",
+    "page_count": 12,
+    "created_at": "2026-05-22T08:55:00Z"
+  },
+  "latest_job": {
+    "id": 456,
+    "uuid": "d677e8f8-6e96-4c88-a126-61ff0d753910",
+    "document_id": 123,
+    "status": "SUCCEEDED",
+    "stage": "FINALIZING",
+    "profile": "fast_text"
+  }
+}
+```
 
 ## Track progress
 
@@ -240,6 +302,73 @@ Example (changes since timestamp):
 
 ```
 GET /v1/jobs/?updated_after=2026-02-01T12:00:00
+```
+
+## Start or reuse ingestion for an existing document
+
+To process an already uploaded document again, use the document UUID endpoint.
+The lookup is always scoped to the authenticated tenant; another tenant's UUID
+and a non-existent UUID both return the same `404 Not Found`.
+
+```
+POST /v1/documents/{document_uuid}/ingest/
+```
+
+Requires scope: `documents:write`.
+
+Body (JSON):
+- `mode` (optional) — `reuse_existing` (default), `retry_failed`, or `create_new`
+- `profile` (optional) — extraction profile name
+- `options_json` (optional) — Docling options JSON
+
+Mode semantics:
+- `reuse_existing` returns a matching `QUEUED`, `RUNNING`, or `SUCCEEDED` job
+  without starting a duplicate job. If no matching job exists, a new job is
+  created.
+- `retry_failed` retries the latest matching `FAILED` or `QUARANTINED` job when
+  it is still below its retry limit.
+- `create_new` always creates a new job. Successful jobs and their artifacts are
+  not overwritten.
+
+The API copies the current clean or quarantine source file into a job-specific
+source path before queuing a new/retried job. This keeps reprocessing from
+depending on a quarantine file that may already have been moved during scanning.
+
+Example:
+
+```json
+{
+  "mode": "create_new",
+  "profile": "fast_text",
+  "options_json": {"max_num_pages": 50}
+}
+```
+
+Response:
+
+```json
+{
+  "mode": "create_new",
+  "created": true,
+  "reused": false,
+  "retried": false,
+  "document": {
+    "id": 123,
+    "uuid": "7c86f0fd-9de2-41ad-b0df-5ef5d221a35d",
+    "sha256": "9e0f...",
+    "status": "CLEAN"
+  },
+  "job": {
+    "id": 789,
+    "uuid": "21fbf45c-a02d-4a54-a45f-f5ddf8ac90c0",
+    "document_id": 123,
+    "profile": "fast_text",
+    "status": "QUEUED",
+    "stage": "SCANNING"
+  },
+  "job_id": 789,
+  "job_uuid": "21fbf45c-a02d-4a54-a45f-f5ddf8ac90c0"
+}
 ```
 
 ## Compare quality profiles
@@ -337,6 +466,9 @@ timeout) and return progress in your UI.
 - `FILE_TOO_LARGE` — file exceeds size limit
 - `DUPLICATE_DOCUMENT` — same document already uploaded for the tenant
 - `INVALID_OPTIONS` — Docling options JSON invalid
+- `MISSING_SOURCE_FILE` — existing document has no readable clean/quarantine source file
+- `NOT_RETRYABLE` — requested retry mode but no retryable job exists
+- `RETRY_LIMIT` — retryable job has reached its retry limit
 
 ## Troubleshooting
 
