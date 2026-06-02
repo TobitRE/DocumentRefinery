@@ -153,8 +153,11 @@ ${PY_BIN} -m pip check || print_warning "pip check reported dependency issues"
 
 if [ -f "deploy/docling_runtime_check.py" ]; then
   print_status "Running Docling runtime diagnostics..."
-  ${PY_BIN} deploy/docling_runtime_check.py || \
-    print_warning "Docling diagnostics reported issues; run '${PY_BIN} deploy/docling_runtime_check.py --smoke' for a conversion smoke test"
+  if ! ${PY_BIN} deploy/docling_runtime_check.py; then
+    print_error "Docling diagnostics failed; aborting before migrations/restarts."
+    print_error "Run '${PY_BIN} deploy/docling_runtime_check.py --json' for details."
+    exit 1
+  fi
 fi
 
 print_status "Checking Docling cache configuration..."

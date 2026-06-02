@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from datetime import timedelta
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -21,8 +22,6 @@ from django.utils import timezone
 
 from clamav_client import clamd
 from docling_core.types.doc import DoclingDocument
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.base_models import InputFormat
 
 from .models import (
     Artifact,
@@ -41,6 +40,24 @@ from .profiles import build_profile_pipeline_options
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
 DOCLING_UNLIMITED = 9223372036854775807
+
+DocumentConverter = None
+PdfFormatOption = None
+InputFormat = None
+
+
+def _load_docling_converter():
+    global DocumentConverter, PdfFormatOption, InputFormat
+    if DocumentConverter is None or PdfFormatOption is None or InputFormat is None:
+        converter_module = import_module("docling.document_converter")
+        base_models_module = import_module("docling.datamodel.base_models")
+        if DocumentConverter is None:
+            DocumentConverter = converter_module.DocumentConverter
+        if PdfFormatOption is None:
+            PdfFormatOption = converter_module.PdfFormatOption
+        if InputFormat is None:
+            InputFormat = base_models_module.InputFormat
+    return DocumentConverter, PdfFormatOption, InputFormat
 
 
 def _webhook_max_attempts() -> int:
@@ -394,17 +411,18 @@ def docling_convert_task(self, job_id: int) -> int:
     )
 
     try:
+        document_converter, pdf_format_option, input_format = _load_docling_converter()
         pipeline_options = build_pdf_pipeline_options(job.options_json or {})
         if not pipeline_options:
             pipeline_options = build_profile_pipeline_options(job.profile)
         if pipeline_options:
-            converter = DocumentConverter(
+            converter = document_converter(
                 format_options={
-                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                    input_format.PDF: pdf_format_option(pipeline_options=pipeline_options)
                 }
             )
         else:
-            converter = DocumentConverter()
+            converter = document_converter()
         result = converter.convert(
             document.get_clean_path(),
             max_num_pages=max_pages,

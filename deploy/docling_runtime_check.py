@@ -122,7 +122,22 @@ def check_imports(reporter: Reporter) -> None:
 
         reporter.ok("docling:imports", "core Docling imports succeeded")
     except Exception as exc:
-        reporter.fail("docling:imports", f"{type(exc).__name__}: {exc}")
+        try:
+            import docling
+
+            location = getattr(docling, "__file__", "<unknown>")
+            paths = ", ".join(str(path) for path in getattr(docling, "__path__", []))
+        except Exception as docling_exc:
+            location = f"<docling import failed: {type(docling_exc).__name__}: {docling_exc}>"
+            paths = "<unknown>"
+        reporter.fail(
+            "docling:imports",
+            (
+                f"{type(exc).__name__}: {exc}; "
+                f"docling={location}; docling_path=[{paths}]; "
+                f"docling-slim={package_version('docling-slim') or 'not installed'}"
+            ),
+        )
         return
 
     try:
@@ -211,6 +226,7 @@ def main() -> int:
     check_package(reporter, "Django", "5.2.x LTS", lambda value: value.startswith("5.2."))
     check_package(reporter, "redis", "7.x", lambda value: value.startswith("7."))
     check_package(reporter, "docling", "2.96.1", lambda value: value == "2.96.1")
+    check_package(reporter, "docling-slim", "2.96.1", lambda value: value == "2.96.1")
     check_environment(reporter)
     check_imports(reporter)
     if args.smoke:

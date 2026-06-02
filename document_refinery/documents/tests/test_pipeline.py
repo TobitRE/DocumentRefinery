@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import zipfile
+from enum import Enum
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -22,7 +23,15 @@ from documents.tasks import (
     export_artifacts_task,
     scan_pdf_task,
 )
-from docling.datamodel.base_models import InputFormat
+
+
+class DummyInputFormat(Enum):
+    PDF = "pdf"
+
+
+class DummyPdfFormatOption:
+    def __init__(self, pipeline_options=None):
+        self.pipeline_options = pipeline_options
 
 
 class TestPipelineTasks(TestCase):
@@ -127,8 +136,11 @@ class TestPipelineTasks(TestCase):
 
             from docling_core.types.doc import DoclingDocument
 
-            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
-                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with self._patch_docling_converter(DummyConverter):
                 docling_convert_task(job.id)
 
             export_artifacts_task(job.id)
@@ -166,12 +178,12 @@ class TestPipelineTasks(TestCase):
                 def convert(self, *args, **kwargs):
                     return DummyResult(DoclingDocument(name="test"))
 
-            with patch("documents.tasks.DocumentConverter", DummyConverter):
+            with self._patch_docling_converter(DummyConverter):
                 docling_convert_task(job.id)
 
             format_options = captured.get("format_options")
             self.assertIsNotNone(format_options)
-            pdf_option = format_options.get(InputFormat.PDF)
+            pdf_option = format_options.get(DummyInputFormat.PDF)
             self.assertIsNotNone(pdf_option)
             pipeline_options = pdf_option.pipeline_options
             self.assertFalse(pipeline_options.do_ocr)
@@ -196,8 +208,11 @@ class TestPipelineTasks(TestCase):
 
             from docling_core.types.doc import DoclingDocument
 
-            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
-                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with self._patch_docling_converter(DummyConverter):
                 with self.assertRaises(RuntimeError):
                     docling_convert_task(job.id)
 
@@ -232,7 +247,7 @@ class TestPipelineTasks(TestCase):
                     captured["kwargs"] = kwargs
                     return DummyResult(DoclingDocument(name="test"))
 
-            with patch("documents.tasks.DocumentConverter", return_value=DummyConverter()):
+            with self._patch_docling_converter(DummyConverter):
                 docling_convert_task(job.id)
 
             self.assertEqual(captured["kwargs"]["max_num_pages"], DOCLING_UNLIMITED)
@@ -276,8 +291,11 @@ class TestPipelineTasks(TestCase):
                 )
             )
 
-            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
-                mock_convert.return_value = DummyResult(docling_doc)
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    return DummyResult(docling_doc)
+
+            with self._patch_docling_converter(DummyConverter):
                 docling_convert_task(job.id)
 
             export_artifacts_task(job.id)
@@ -318,8 +336,11 @@ class TestPipelineTasks(TestCase):
 
             from docling_core.types.doc import DoclingDocument
 
-            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
-                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with self._patch_docling_converter(DummyConverter):
                 docling_convert_task(job.id)
 
             export_artifacts_task(job.id)
@@ -346,8 +367,11 @@ class TestPipelineTasks(TestCase):
 
             from docling_core.types.doc import DoclingDocument
 
-            with patch("documents.tasks.DocumentConverter.convert") as mock_convert:
-                mock_convert.return_value = DummyResult(DoclingDocument(name="test"))
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with self._patch_docling_converter(DummyConverter):
                 docling_convert_task(job.id)
 
             with patch(
@@ -360,6 +384,12 @@ class TestPipelineTasks(TestCase):
             job.refresh_from_db()
             self.assertEqual(job.status, IngestionJobStatus.FAILED)
             self.assertEqual(job.error_code, "DOCLING_EXPORT_FAILED")
+
+    def _patch_docling_converter(self, converter):
+        return patch(
+            "documents.tasks._load_docling_converter",
+            return_value=(converter, DummyPdfFormatOption, DummyInputFormat),
+        )
 
     def test_all_profiles_build_docling_pipeline_options(self):
         for profile in PROFILE_NAMES:
