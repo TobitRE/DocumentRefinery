@@ -113,7 +113,9 @@ body {
 
 .status {
   font-size: .75rem;
-  min-height: 1.5rem;
+  line-height: 1.25;
+  min-height: 1.75rem;
+  padding-block: .3125rem;
 }
 
 .status-ok,
@@ -268,6 +270,10 @@ body {
 .link-card span {
   color: var(--dr-muted);
   font-size: .875rem;
+}
+
+.dr-section-card {
+  margin-top: 1rem;
 }
 
 .dr-auth-panel {

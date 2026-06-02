@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}Document Refinery - Ops Dashboard{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'vendor/tabler/1.4.0/css/tabler.min.css' %}" />
-    <link rel="stylesheet" href="{% static 'dashboard/app.css' %}" />
+    <link rel="stylesheet" href="{% static 'dashboard/app.css' %}?v=20260602-dashboard-polish" />
   </head>
   <body>
     <div class="page dr-shell">
@@ -98,7 +98,7 @@
       </div>
     </div>
     <script src="{% static 'vendor/tabler/1.4.0/js/tabler.min.js' %}"></script>
-    <script src="{% static 'dashboard/app.js' %}"></script>
+    <script src="{% static 'dashboard/app.js' %}?v=20260602-dashboard-polish"></script>
     {% block scripts %}{% endblock %}
   </body>
 </html>

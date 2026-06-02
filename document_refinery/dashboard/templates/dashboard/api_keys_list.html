@@ -2,6 +2,19 @@
 
 {% block title %}Document Refinery — API Keys{% endblock %}
 
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Access</div>
+      <h1 class="page-title">API keys</h1>
+      <div class="dr-page-description">
+        Manage tenant API keys, scopes, upload MIME limits, and Docling option defaults.
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/api-keys/new/">Create key</a>
+  </div>
+{% endblock %}
+
 {% block content %}
   <section class="card">
     <div class="row" style="justify-content: space-between;">
@@ -14,35 +27,37 @@
   </section>
 
   <section class="card">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Tenant</th>
-          <th>Prefix</th>
-          <th>Scopes</th>
-          <th>Status</th>
-          <th>Last used</th>
-          <th>Created</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for key in keys %}
+    <div class="dr-table-wrap">
+      <table class="table">
+        <thead>
           <tr>
-            <td><a href="/dashboard/api-keys/{{ key.id }}/">{{ key.name }}</a></td>
-            <td>{{ key.tenant.name }}</td>
-            <td class="mono">{{ key.prefix }}</td>
-            <td class="mono">{{ key.scopes|join:", " }}</td>
-            <td>{{ key.active|yesno:"Active,Inactive" }}</td>
-            <td class="mono">{{ key.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
-            <td class="mono">{{ key.created_at|date:"Y-m-d H:i" }}</td>
+            <th>Name</th>
+            <th>Tenant</th>
+            <th>Prefix</th>
+            <th>Scopes</th>
+            <th>Status</th>
+            <th>Last used</th>
+            <th>Created</th>
           </tr>
-        {% empty %}
-          <tr>
-            <td colspan="7" class="muted">No API keys found.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for key in keys %}
+            <tr>
+              <td><a href="/dashboard/api-keys/{{ key.id }}/">{{ key.name }}</a></td>
+              <td>{{ key.tenant.name }}</td>
+              <td class="mono">{{ key.prefix }}</td>
+              <td class="mono">{{ key.scopes|join:", " }}</td>
+              <td>{{ key.active|yesno:"Active,Inactive" }}</td>
+              <td class="mono">{{ key.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
+              <td class="mono">{{ key.created_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7" class="muted">No API keys found.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
 {% endblock %}

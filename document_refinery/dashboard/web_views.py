@@ -46,11 +46,11 @@ class DashboardPageView(TemplateView):
 
 @method_decorator(staff_member_required, name="dispatch")
 class DashboardToolsPageView(TemplateView):
-    template_name = "dashboard/upload.html"
+    template_name = "dashboard/tools.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["nav_active"] = "upload"
+        context["nav_active"] = "tools"
         context["profiles"] = profile_catalog()
         context["capabilities"] = capabilities_payload()
         return context

@@ -157,6 +157,19 @@
     });
   }
 
+  function resetDoclingOptionsControls(root) {
+    qsa("[data-docling-options-controls]", root).forEach((controls) => {
+      const status = qs("[data-options-status]", controls);
+      const resolveOutput = qs("[data-options-resolve-output]", controls);
+      if (status) {
+        status.textContent = "Ready.";
+        status.className = "muted";
+      }
+      if (resolveOutput) resolveOutput.textContent = "{}";
+      clearOptionTouched(controls);
+    });
+  }
+
   function markOptionTouched(input) {
     if (input) input.dataset.optionTouched = "true";
   }
@@ -379,8 +392,14 @@
         qsa("input, textarea, select", page).forEach((input) => {
           if (input.id === "apiKeyInput") return;
           if (input.type === "checkbox") input.checked = input.id === "uploadIngest";
+          else if (input.tagName === "SELECT") input.selectedIndex = 0;
           else input.value = "";
         });
+        resetDoclingOptionsControls(page);
+        if (status) {
+          status.textContent = "No upload yet.";
+          status.className = "muted";
+        }
         renderPanel(result, "No upload yet.");
       });
     }

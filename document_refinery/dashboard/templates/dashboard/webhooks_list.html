@@ -2,6 +2,19 @@
 
 {% block title %}Document Refinery — Webhooks{% endblock %}
 
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Webhooks</div>
+      <h1 class="page-title">Webhook endpoints</h1>
+      <div class="dr-page-description">
+        Manage tenant delivery targets and inspect delivery totals, retry state, and recent outcomes.
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/webhooks/new/">Create endpoint</a>
+  </div>
+{% endblock %}
+
 {% block content %}
   <section class="card">
     <div class="row" style="justify-content: space-between;">
@@ -14,37 +27,39 @@
   </section>
 
   <section class="card">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Tenant</th>
-          <th>URL</th>
-          <th>Status</th>
-          <th>Deliveries</th>
-          <th>Last success</th>
-          <th>Last failure</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for endpoint in endpoints %}
+    <div class="dr-table-wrap">
+      <table class="table">
+        <thead>
           <tr>
-            <td><a href="/dashboard/webhooks/{{ endpoint.id }}/">{{ endpoint.name }}</a></td>
-            <td>{{ endpoint.tenant.name }}</td>
-            <td class="mono">{{ endpoint.url }}</td>
-            <td>{{ endpoint.enabled|yesno:"Enabled,Disabled" }}</td>
-            <td class="mono">
-              {{ endpoint.delivery_total }} total · {{ endpoint.delivery_failed }} failed · {{ endpoint.delivery_retrying }} retrying
-            </td>
-            <td class="mono">{{ endpoint.last_success_at|date:"Y-m-d H:i"|default:"—" }}</td>
-            <td class="mono">{{ endpoint.last_failure_at|date:"Y-m-d H:i"|default:"—" }}</td>
+            <th>Name</th>
+            <th>Tenant</th>
+            <th>URL</th>
+            <th>Status</th>
+            <th>Deliveries</th>
+            <th>Last success</th>
+            <th>Last failure</th>
           </tr>
-        {% empty %}
-          <tr>
-            <td colspan="7" class="muted">No webhook endpoints configured.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for endpoint in endpoints %}
+            <tr>
+              <td><a href="/dashboard/webhooks/{{ endpoint.id }}/">{{ endpoint.name }}</a></td>
+              <td>{{ endpoint.tenant.name }}</td>
+              <td class="mono">{{ endpoint.url }}</td>
+              <td>{{ endpoint.enabled|yesno:"Enabled,Disabled" }}</td>
+              <td class="mono">
+                {{ endpoint.delivery_total }} total · {{ endpoint.delivery_failed }} failed · {{ endpoint.delivery_retrying }} retrying
+              </td>
+              <td class="mono">{{ endpoint.last_success_at|date:"Y-m-d H:i"|default:"—" }}</td>
+              <td class="mono">{{ endpoint.last_failure_at|date:"Y-m-d H:i"|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7" class="muted">No webhook endpoints configured.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
 {% endblock %}

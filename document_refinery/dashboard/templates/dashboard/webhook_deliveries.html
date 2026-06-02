@@ -2,6 +2,19 @@
 
 {% block title %}Document Refinery — Webhook Logs{% endblock %}
 
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Webhooks</div>
+      <h1 class="page-title">Webhook delivery logs</h1>
+      <div class="dr-page-description">
+        Filter recent deliveries across endpoints and inspect retry timing, attempts, and response state.
+      </div>
+    </div>
+    <a class="btn btn-outline-primary" href="/dashboard/webhooks/">Back to webhooks</a>
+  </div>
+{% endblock %}
+
 {% block content %}
   <section class="card">
     <div class="row" style="justify-content: space-between;">
@@ -45,35 +58,37 @@
   </section>
 
   <section class="card">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Endpoint</th>
-          <th>Event</th>
-          <th>Status</th>
-          <th>Attempt</th>
-          <th>Response</th>
-          <th>Next retry</th>
-          <th>Created</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for delivery in deliveries %}
+    <div class="dr-table-wrap">
+      <table class="table">
+        <thead>
           <tr>
-            <td><a href="/dashboard/webhooks/{{ delivery.endpoint.id }}/">{{ delivery.endpoint.name }}</a></td>
-            <td><a href="/dashboard/webhook-deliveries/{{ delivery.id }}/">{{ delivery.event_type }}</a></td>
-            <td>{{ delivery.status }}</td>
-            <td>{{ delivery.attempt }}</td>
-            <td>{{ delivery.response_code|default:"—" }}</td>
-            <td class="mono">{{ delivery.next_retry_at|date:"Y-m-d H:i"|default:"—" }}</td>
-            <td class="mono">{{ delivery.created_at|date:"Y-m-d H:i" }}</td>
+            <th>Endpoint</th>
+            <th>Event</th>
+            <th>Status</th>
+            <th>Attempt</th>
+            <th>Response</th>
+            <th>Next retry</th>
+            <th>Created</th>
           </tr>
-        {% empty %}
-          <tr>
-            <td colspan="7" class="muted">No webhook deliveries found.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for delivery in deliveries %}
+            <tr>
+              <td><a href="/dashboard/webhooks/{{ delivery.endpoint.id }}/">{{ delivery.endpoint.name }}</a></td>
+              <td><a href="/dashboard/webhook-deliveries/{{ delivery.id }}/">{{ delivery.event_type }}</a></td>
+              <td>{{ delivery.status }}</td>
+              <td>{{ delivery.attempt }}</td>
+              <td>{{ delivery.response_code|default:"—" }}</td>
+              <td class="mono">{{ delivery.next_retry_at|date:"Y-m-d H:i"|default:"—" }}</td>
+              <td class="mono">{{ delivery.created_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="7" class="muted">No webhook deliveries found.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
 {% endblock %}

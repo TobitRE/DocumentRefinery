@@ -1,0 +1,64 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Document Refinery - Tools{% endblock %}
+
+{% block page_header %}
+  <div class="dr-page-header">
+    <div>
+      <div class="dr-page-kicker">Tools</div>
+      <h1 class="page-title">Dashboard tools</h1>
+      <div class="dr-page-description">
+        Entry points for operational actions that are backed by the API and current Docling capability checks.
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section class="cta-grid">
+    <a class="link-card" href="/dashboard/upload/">
+      <strong>PDF upload</strong>
+      <span>Upload one or more PDFs with profile presets, structured Docling controls, and JSON fallback.</span>
+    </a>
+    <a class="link-card" href="/dashboard/compare/">
+      <strong>Profile comparison</strong>
+      <span>Queue comparison jobs for an existing document across backend-defined Docling profiles.</span>
+    </a>
+    <a class="link-card" href="/dashboard/runtime/">
+      <strong>Runtime diagnostics</strong>
+      <span>Inspect Docling packages, runtime settings, broker/worker state, filesystem paths, OCR, and FFmpeg.</span>
+    </a>
+    <a class="link-card" href="/dashboard/jobs/">
+      <strong>Job inspection</strong>
+      <span>Filter ingestion jobs and open job details with artifacts, options, metrics, and retry/cancel controls.</span>
+    </a>
+    <a class="link-card" href="/dashboard/api-keys/">
+      <strong>API keys</strong>
+      <span>Create or update tenant keys, scopes, upload MIME limits, and default Docling options.</span>
+    </a>
+    <a class="link-card" href="/dashboard/webhooks/">
+      <strong>Webhook endpoints</strong>
+      <span>Review delivery targets and connect job update events to tenant-specific endpoints.</span>
+    </a>
+  </section>
+
+  <section class="card dr-section-card">
+    <div class="card-body">
+      <h2 class="card-title">Boundaries</h2>
+      <div class="dr-grid">
+        <div class="panel">
+          <strong>Implemented</strong>
+          <div class="muted">PDF upload, profile presets, Docling JSON/markdown/text/doctags exports, figure zip metadata, runtime diagnostics, job and webhook inspection.</div>
+        </div>
+        <div class="panel">
+          <strong>Planned later</strong>
+          <div class="muted">Real chunking, VLM inference, and multi-format uploads remain future work until backend support is explicit.</div>
+        </div>
+        <div class="panel">
+          <strong>Not offered here</strong>
+          <div class="muted">Remote Docling services, arbitrary plugin execution, and unrestricted non-PDF ingestion are intentionally outside this dashboard.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}

@@ -226,13 +226,11 @@ class TestDashboardWebViews(TestCase):
         response = self.client.get("/dashboard/tools/")
         self.assertEqual(response.status_code, 200)
         content = response.content.decode("utf-8")
-        self.assertIn("PDF upload", content)
-        self.assertIn("Use key", content)
-        self.assertNotIn(">Save key<", content)
-        self.assertNotIn("sessionStorage", content)
-        self.assertIn('accept="application/pdf,.pdf" multiple', content)
-        self.assertIn("Structured Docling controls", content)
-        self.assertIn("legacy image export", content)
+        self.assertIn("Dashboard tools", content)
+        self.assertIn("/dashboard/upload/", content)
+        self.assertIn("/dashboard/runtime/", content)
+        self.assertNotIn('id="uploadFile"', content)
+        self.assertNotIn("Structured Docling controls", content)
 
     def test_dashboard_tabler_target_pages(self):
         document = Document.objects.create(
@@ -257,6 +255,7 @@ class TestDashboardWebViews(TestCase):
         )
 
         checks = [
+            ("/dashboard/tools/", "Dashboard tools"),
             ("/dashboard/upload/", "PDF upload"),
             ("/dashboard/jobs/", "Ingestion jobs"),
             (f"/dashboard/jobs/{job.id}/", "Job #"),
