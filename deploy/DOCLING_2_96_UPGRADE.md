@@ -25,13 +25,18 @@ docling==2.96.1
 
    ```env
    HF_HOME=/var/lib/docling_service/hf_cache
+   DOCLING_CACHE_DIR=/var/lib/docling_service/docling_cache
+   DOCLING_ARTIFACTS_PATH=/var/lib/docling_service/docling_artifacts
    DOCLING_DEVICE=cpu
    DOCLING_NUM_THREADS=2
    CELERY_WORKER_CONCURRENCY=1
    ```
 
-   `HF_HOME` muss für den Celery-Service-User beschreibbar sein. Docling und RapidOCR laden
-   Modellartefakte nach; bei `ProtectHome=read-only` darf der Cache nicht unter `$HOME` liegen.
+   `HF_HOME`, `DOCLING_CACHE_DIR` und `DOCLING_ARTIFACTS_PATH` muessen fuer den
+   Celery-Service-User beschreibbar sein und unter `DATA_ROOT` liegen. Das venv und
+   `site-packages` sollen nicht beschreibbar sein. Docling-Basismodelle und
+   RapidOCR-Modelle werden in `DOCLING_ARTIFACTS_PATH` vorab abgelegt, damit der
+   erste Job keine Modelle zur Laufzeit nach `site-packages` oder `$HOME` herunterlaedt.
 
 ## Update ausführen
 
@@ -43,7 +48,10 @@ Das Update-Script führt nach `pip install -r requirements.txt` automatisch aus:
 
 ```sh
 venv/bin/python -m pip check
-venv/bin/python deploy/docling_runtime_check.py
+venv/bin/python deploy/docling_model_warmup.py --env-file .env
+venv/bin/python deploy/docling_runtime_check.py --check-models
+venv/bin/python deploy/docling_runtime_check.py --smoke --profile ocr_only
+venv/bin/python deploy/docling_runtime_check.py --smoke --profile structured
 ```
 
 ## Diagnose und Smoke-Test
@@ -52,6 +60,13 @@ Für eine reine Analyse:
 
 ```sh
 venv/bin/python deploy/docling_runtime_check.py
+```
+
+Für RapidOCR-Modellartefakte:
+
+```sh
+venv/bin/python deploy/docling_model_warmup.py --env-file .env --check-only
+venv/bin/python deploy/docling_runtime_check.py --check-models
 ```
 
 Für einen echten einseitigen Docling-PDF-Smoke:
@@ -79,7 +94,16 @@ Wenn der Smoke beim Modell-Download scheitert, zuerst prüfen:
 ```sh
 echo "$HF_HOME"
 test -w "$HF_HOME" && echo writable
+echo "$DOCLING_CACHE_DIR"
+test -w "$DOCLING_CACHE_DIR" && echo cache-writable
+echo "$DOCLING_ARTIFACTS_PATH"
+test -w "$DOCLING_ARTIFACTS_PATH" && echo artifacts-writable
 ```
+
+RapidOCR darf nicht versuchen, nach
+`venv/lib/python*/site-packages/rapidocr/models/` zu schreiben. Wenn dort ein
+`Read-only file system`-Fehler erscheint, ist der Artefaktpfad nicht gesetzt, nicht
+beschreibbar, oder der OCR-Warmup wurde nicht erfolgreich ausgefuehrt.
 
 Wenn der Smoke auf Apple Silicon oder macOS mit MPS/Torch-Fehlern scheitert, sicherstellen:
 
@@ -116,6 +140,7 @@ curl -H "X-Internal-Token: $INTERNAL_ENDPOINTS_TOKEN" http://localhost/healthz
 curl -H "X-Internal-Token: $INTERNAL_ENDPOINTS_TOKEN" http://localhost/readyz
 ```
 
-Danach einen kleinen PDF-Job mit `fast_text` einreichen. Für OCR/Profile mit OCR sollte der erste
-Lauf zusätzliche RapidOCR-Modelle herunterladen; das ist nur dann sauber, wenn `HF_HOME` und die
-site-packages-Schreibrechte für den Service-User passen oder die Modelle vorab vorgewärmt wurden.
+Danach einen kleinen PDF-Job mit `fast_text` und einen kleinen OCR-Job mit `ocr_only`
+einreichen. OCR-Profile duerfen nach dem Update keine Modelle mehr in `site-packages`
+herunterladen; die RapidOCR-Modelle muessen bereits unter `DOCLING_ARTIFACTS_PATH`
+liegen.

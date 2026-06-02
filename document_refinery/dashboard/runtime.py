@@ -187,6 +187,108 @@ def _import_check(label: str, module_name: str) -> dict[str, Any]:
     }
 
 
+def _rapidocr_artifact_check(artifacts_path: Path) -> dict[str, Any]:
+    if importlib.util.find_spec("rapidocr") is None:
+        return {
+            "label": "RapidOCR artifacts",
+            "status": "warn",
+            "message": "rapidocr is not importable",
+            "path": str(artifacts_path),
+        }
+
+    backends = []
+    if importlib.util.find_spec("onnxruntime") is not None:
+        backends.append("onnxruntime")
+    if importlib.util.find_spec("torch") is not None:
+        backends.append("torch")
+    if not backends:
+        return {
+            "label": "RapidOCR artifacts",
+            "status": "warn",
+            "message": "no supported RapidOCR backend is importable",
+            "path": str(artifacts_path),
+        }
+
+    try:
+        from docling.models.stages.ocr.rapid_ocr_model import RapidOcrModel
+
+        expected = []
+        for language in ("chinese", "english"):
+            model_sets = RapidOcrModel._models_by_language.get(language)  # noqa: SLF001
+            if not model_sets:
+                continue
+            for backend in backends:
+                model_set = model_sets.get(backend)
+                if not model_set:
+                    continue
+                for details in model_set.values():
+                    expected.append(artifacts_path / "RapidOcr" / details["path"])
+        missing = [str(path) for path in expected if not path.exists()]
+        return {
+            "label": "RapidOCR artifacts",
+            "status": "ok" if not missing else "fail",
+            "message": "model artifacts ready" if not missing else f"{len(missing)} missing",
+            "path": str(artifacts_path),
+            "backends": backends,
+            "expected_count": len(expected),
+            "missing_count": len(missing),
+        }
+    except Exception as exc:
+        return {
+            "label": "RapidOCR artifacts",
+            "status": "fail",
+            "message": f"{type(exc).__name__}: {exc}",
+            "path": str(artifacts_path),
+        }
+
+
+def _docling_base_artifact_check(artifacts_path: Path) -> dict[str, Any]:
+    try:
+        from docling.datamodel.pipeline_options import LayoutOptions
+        from docling.models.stages.table_structure.table_structure_model import (
+            TableStructureModel,
+        )
+
+        expected = [
+            artifacts_path / LayoutOptions().model_spec.model_repo_folder,
+            artifacts_path / TableStructureModel._model_repo_folder,  # noqa: SLF001
+        ]
+        missing = [str(path) for path in expected if not path.exists()]
+        return {
+            "label": "Docling base artifacts",
+            "status": "ok" if not missing else "fail",
+            "message": "base model artifacts ready" if not missing else f"{len(missing)} missing",
+            "path": str(artifacts_path),
+            "expected_count": len(expected),
+            "missing_count": len(missing),
+        }
+    except Exception as exc:
+        return {
+            "label": "Docling base artifacts",
+            "status": "fail",
+            "message": f"{type(exc).__name__}: {exc}",
+            "path": str(artifacts_path),
+        }
+
+
+def _easyocr_artifact_check(artifacts_path: Path) -> dict[str, Any]:
+    if importlib.util.find_spec("easyocr") is None:
+        return {
+            "label": "EasyOCR artifacts",
+            "status": "warn",
+            "message": "easyocr is not importable",
+            "path": str(artifacts_path),
+        }
+    easyocr_dir = artifacts_path / "EasyOcr"
+    ready = easyocr_dir.exists() and any(easyocr_dir.iterdir())
+    return {
+        "label": "EasyOCR artifacts",
+        "status": "ok" if ready else "fail",
+        "message": "model artifacts ready" if ready else "missing",
+        "path": str(easyocr_dir),
+    }
+
+
 def _celery_status() -> dict[str, Any]:
     broker_ok = False
     try:
@@ -259,6 +361,20 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
 
     data_root = Path(getattr(settings, "DATA_ROOT", "/var/lib/docling_service"))
     hf_home = Path(getattr(settings, "HF_HOME", os.environ.get("HF_HOME", data_root / "hf_cache")))
+    docling_cache_dir = Path(
+        getattr(
+            settings,
+            "DOCLING_CACHE_DIR",
+            os.environ.get("DOCLING_CACHE_DIR", data_root / "docling_cache"),
+        )
+    )
+    artifacts_path = Path(
+        getattr(
+            settings,
+            "DOCLING_ARTIFACTS_PATH",
+            os.environ.get("DOCLING_ARTIFACTS_PATH", data_root / "docling_artifacts"),
+        )
+    )
 
     payload = {
         "timestamp": timezone.now().isoformat(),
@@ -273,6 +389,8 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
             "DOCLING_DEVICE": str(getattr(settings, "DOCLING_DEVICE", "")),
             "DOCLING_NUM_THREADS": str(getattr(settings, "DOCLING_NUM_THREADS", "")),
             "HF_HOME": str(hf_home),
+            "DOCLING_CACHE_DIR": str(docling_cache_dir),
+            "DOCLING_ARTIFACTS_PATH": str(artifacts_path),
             "DATA_ROOT": str(data_root),
             "CELERY_WORKER_CONCURRENCY": str(
                 getattr(settings, "CELERY_WORKER_CONCURRENCY", "")
@@ -282,6 +400,16 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
         "filesystem": {
             "data_root": _path_check("DATA_ROOT", data_root, must_exist=True),
             "hf_home": _path_check("HF_HOME", hf_home, must_exist=False),
+            "docling_cache_dir": _path_check(
+                "DOCLING_CACHE_DIR",
+                docling_cache_dir,
+                must_exist=False,
+            ),
+            "docling_artifacts_path": _path_check(
+                "DOCLING_ARTIFACTS_PATH",
+                artifacts_path,
+                must_exist=False,
+            ),
             "root": {
                 "label": "/",
                 "path": "/",
@@ -294,8 +422,11 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
             "tesseract": _tool_check("tesseract", ["--version"]),
         },
         "ocr_backends": {
+            "docling_base_artifacts": _docling_base_artifact_check(artifacts_path),
             "rapidocr": _import_check("RapidOCR", "rapidocr"),
+            "rapidocr_artifacts": _rapidocr_artifact_check(artifacts_path),
             "easyocr": _import_check("EasyOCR", "easyocr"),
+            "easyocr_artifacts": _easyocr_artifact_check(artifacts_path),
             "pytesseract": _import_check("pytesseract", "pytesseract"),
             "tesseract_cli": {
                 "label": "Tesseract CLI",

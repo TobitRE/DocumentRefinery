@@ -8,6 +8,18 @@ Group=docling-svc
 WorkingDirectory=/var/www/document_refinery
 EnvironmentFile=/var/www/document_refinery/.env
 ExecStart=/var/www/document_refinery/venv/bin/celery -A config beat --loglevel=INFO
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/docling_service
 Restart=on-failure
 KillSignal=SIGTERM
 

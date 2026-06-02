@@ -63,8 +63,12 @@ def load_dotenv(path: Path) -> None:
 
 
 def set_docling_runtime_defaults() -> None:
+    data_root = Path(os.environ.get("DATA_ROOT", "/var/lib/docling_service"))
     os.environ.setdefault("DOCLING_DEVICE", "cpu")
     os.environ.setdefault("DOCLING_NUM_THREADS", "2")
+    os.environ.setdefault("HF_HOME", str(data_root / "hf_cache"))
+    os.environ.setdefault("DOCLING_CACHE_DIR", str(data_root / "docling_cache"))
+    os.environ.setdefault("DOCLING_ARTIFACTS_PATH", str(data_root / "docling_artifacts"))
 
 
 def package_version(name: str) -> str | None:
@@ -87,9 +91,16 @@ def check_package(reporter: Reporter, name: str, expected: str, predicate) -> No
 def check_environment(reporter: Reporter) -> None:
     data_root = Path(os.environ.get("DATA_ROOT", "/var/lib/docling_service"))
     hf_home = Path(os.environ.get("HF_HOME", str(data_root / "hf_cache")))
+    docling_cache_dir = Path(
+        os.environ.get("DOCLING_CACHE_DIR", str(data_root / "docling_cache"))
+    )
+    artifacts_path = Path(
+        os.environ.get("DOCLING_ARTIFACTS_PATH", str(data_root / "docling_artifacts"))
+    )
     docling_device = os.environ.get("DOCLING_DEVICE")
     docling_threads = os.environ.get("DOCLING_NUM_THREADS")
     worker_concurrency = os.environ.get("CELERY_WORKER_CONCURRENCY")
+    data_root_abs = data_root.resolve()
 
     if docling_device:
         reporter.ok("env:DOCLING_DEVICE", docling_device)
@@ -112,6 +123,26 @@ def check_environment(reporter: Reporter) -> None:
         reporter.ok("env:HF_HOME", f"{hf_home} is writable")
     else:
         reporter.fail("env:HF_HOME", f"{hf_home} is not writable")
+    if data_root_abs not in hf_home.resolve().parents:
+        reporter.warn("env:HF_HOME", f"{hf_home} is outside DATA_ROOT")
+
+    if not docling_cache_dir.exists():
+        reporter.warn("env:DOCLING_CACHE_DIR", f"{docling_cache_dir} does not exist yet")
+    elif os.access(docling_cache_dir, os.W_OK):
+        reporter.ok("env:DOCLING_CACHE_DIR", f"{docling_cache_dir} is writable")
+    else:
+        reporter.fail("env:DOCLING_CACHE_DIR", f"{docling_cache_dir} is not writable")
+    if data_root_abs not in docling_cache_dir.resolve().parents:
+        reporter.warn("env:DOCLING_CACHE_DIR", f"{docling_cache_dir} is outside DATA_ROOT")
+
+    if not artifacts_path.exists():
+        reporter.warn("env:DOCLING_ARTIFACTS_PATH", f"{artifacts_path} does not exist yet")
+    elif os.access(artifacts_path, os.W_OK):
+        reporter.ok("env:DOCLING_ARTIFACTS_PATH", f"{artifacts_path} is writable")
+    else:
+        reporter.fail("env:DOCLING_ARTIFACTS_PATH", f"{artifacts_path} is not writable")
+    if data_root_abs not in artifacts_path.resolve().parents:
+        reporter.warn("env:DOCLING_ARTIFACTS_PATH", f"{artifacts_path} is outside DATA_ROOT")
 
 
 def check_imports(reporter: Reporter) -> None:
@@ -148,6 +179,83 @@ def check_imports(reporter: Reporter) -> None:
         reporter.ok("docling:profiles", f"{len(PROFILE_NAMES)} profiles validated")
     except Exception as exc:
         reporter.fail("docling:profiles", f"{type(exc).__name__}: {exc}")
+
+
+def check_rapidocr_models(reporter: Reporter) -> None:
+    try:
+        from docling_model_warmup import (
+            detect_rapidocr_backends,
+            expected_docling_model_dirs,
+            expected_rapidocr_model_paths,
+            rapidocr_languages,
+            runtime_paths,
+            warm_easyocr_models,
+        )
+    except Exception as exc:
+        reporter.fail("rapidocr:artifacts", f"warmup helper unavailable: {type(exc).__name__}: {exc}")
+        return
+
+    try:
+        paths = runtime_paths()
+        expected_dirs = expected_docling_model_dirs(paths["docling_artifacts_path"])
+        missing_dirs = [str(path) for path in expected_dirs if not path.exists()]
+        if missing_dirs:
+            reporter.fail(
+                "docling:artifacts",
+                (
+                    f"{len(missing_dirs)} missing base model directory/directories under "
+                    f"{paths['docling_artifacts_path']}; run deploy/docling_model_warmup.py"
+                ),
+            )
+        else:
+            reporter.ok(
+                "docling:artifacts",
+                f"{len(expected_dirs)} base model directory/directories ready",
+            )
+
+        backends = detect_rapidocr_backends()
+        languages = rapidocr_languages()
+        if not backends:
+            reporter.warn("rapidocr:artifacts", "no supported RapidOCR backend importable")
+            return
+        expected = expected_rapidocr_model_paths(
+            paths["docling_artifacts_path"],
+            backends=backends,
+            languages=languages,
+        )
+        missing = [str(path) for path in expected if not path.exists()]
+        if missing:
+            reporter.fail(
+                "rapidocr:artifacts",
+                (
+                    f"{len(missing)} missing model artifact(s) under "
+                    f"{paths['docling_artifacts_path']}; run deploy/docling_model_warmup.py"
+                ),
+            )
+        else:
+            reporter.ok(
+                "rapidocr:artifacts",
+                (
+                    f"{len(expected)} model artifact(s) ready; "
+                    f"backends={','.join(backends)}; languages={','.join(languages)}"
+                ),
+            )
+
+        easyocr = warm_easyocr_models(
+            artifacts_path=paths["docling_artifacts_path"],
+            check_only=True,
+        )
+        if easyocr.get("status") == "skip":
+            reporter.warn("easyocr:artifacts", easyocr.get("message", "EasyOCR not installed"))
+        elif easyocr.get("status") == "fail":
+            reporter.fail(
+                "easyocr:artifacts",
+                f"missing model artifacts under {easyocr.get('easyocr_dir')}",
+            )
+        else:
+            reporter.ok("easyocr:artifacts", f"model artifacts ready under {easyocr.get('easyocr_dir')}")
+    except Exception as exc:
+        reporter.fail("rapidocr:artifacts", f"{type(exc).__name__}: {exc}")
 
 
 def build_pdf() -> bytes:
@@ -215,6 +323,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Check DocumentRefinery Docling runtime readiness.")
     parser.add_argument("--env-file", default=str(REPO_ROOT / ".env"))
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--check-models",
+        action="store_true",
+        help="fail if configured Docling/RapidOCR model artifacts are missing",
+    )
     parser.add_argument("--smoke", action="store_true", help="run a real one-page Docling conversion")
     parser.add_argument("--profile", default="fast_text", help="profile to use for --smoke")
     args = parser.parse_args()
@@ -229,6 +342,8 @@ def main() -> int:
     check_package(reporter, "docling-slim", "2.96.1", lambda value: value == "2.96.1")
     check_environment(reporter)
     check_imports(reporter)
+    if args.check_models:
+        check_rapidocr_models(reporter)
     if args.smoke:
         run_smoke(reporter, args.profile)
     return reporter.finish()

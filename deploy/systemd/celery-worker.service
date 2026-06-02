@@ -11,6 +11,18 @@ Environment=DOCLING_NUM_THREADS=2
 Environment=CELERY_WORKER_CONCURRENCY=1
 EnvironmentFile=/var/www/document_refinery/.env
 ExecStart=/var/www/document_refinery/venv/bin/celery -A config worker --loglevel=INFO --concurrency=${CELERY_WORKER_CONCURRENCY}
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/docling_service /var/lib/docling_service/hf_cache /var/lib/docling_service/docling_cache /var/lib/docling_service/docling_artifacts
 Restart=on-failure
 KillSignal=SIGTERM
 

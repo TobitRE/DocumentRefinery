@@ -335,6 +335,7 @@ def main() -> None:
         if ask_user("Run Docling conversion test (CPU/GPU detection)?", default=not resume):
             smoke_code = r'''
 import os
+import atexit
 import shutil
 import sys
 import tempfile
@@ -342,6 +343,13 @@ from pathlib import Path
 
 os.environ.setdefault("DOCLING_DEVICE", "cpu")
 os.environ.setdefault("DOCLING_NUM_THREADS", "2")
+smoke_tmp = Path(tempfile.mkdtemp(prefix="docling-install-smoke-"))
+atexit.register(shutil.rmtree, smoke_tmp, ignore_errors=True)
+(smoke_tmp / "hf_cache").mkdir(parents=True, exist_ok=True)
+(smoke_tmp / "docling_cache").mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("HF_HOME", str(smoke_tmp / "hf_cache"))
+os.environ.setdefault("DOCLING_CACHE_DIR", str(smoke_tmp / "docling_cache"))
+os.environ.pop("DOCLING_ARTIFACTS_PATH", None)
 
 from docling.document_converter import DocumentConverter
 
@@ -381,7 +389,6 @@ def build_pdf() -> bytes:
 pdf_bytes = build_pdf()
 
 with tempfile.TemporaryDirectory() as tmp:
-    os.environ.setdefault("HF_HOME", str(Path(tmp) / "hf_cache"))
     pdf_path = Path(tmp) / "test.pdf"
     pdf_path.write_bytes(pdf_bytes)
     converter = DocumentConverter()
@@ -438,6 +445,8 @@ except Exception as exc:
         allowed_hosts = get_input("ALLOWED_HOSTS (comma-separated)", allowed_hosts_default)
         data_root = get_input("DATA_ROOT", "/var/lib/docling_service")
         hf_home = os.path.join(data_root, "hf_cache")
+        docling_cache_dir = os.path.join(data_root, "docling_cache")
+        docling_artifacts_path = os.path.join(data_root, "docling_artifacts")
         static_root = get_input("STATIC_ROOT", f"{repo_root.parent}/staticfiles")
         broker_url = get_input("CELERY_BROKER_URL", "redis://localhost:6379/0")
 
@@ -505,6 +514,8 @@ except Exception as exc:
             database_url = (
                 f"postgresql://{user_enc}:{pass_enc}@{db_host}:{db_port}/{db_name}"
             )
+        else:
+            database_url = f"sqlite:///{os.path.join(data_root, 'db.sqlite3')}"
 
         internal_token = secrets.token_urlsafe(32)
         print(f"{GREEN}Internal token: {internal_token}{RESET}")
@@ -525,6 +536,8 @@ except Exception as exc:
                 "ALLOWED_HOSTS": allowed_hosts,
                 "DATA_ROOT": data_root,
                 "HF_HOME": hf_home,
+                "DOCLING_CACHE_DIR": docling_cache_dir,
+                "DOCLING_ARTIFACTS_PATH": docling_artifacts_path,
                 "DOCLING_DEVICE": "cpu",
                 "DOCLING_NUM_THREADS": "2",
                 "STATIC_ROOT": static_root,
@@ -571,9 +584,27 @@ except Exception as exc:
         hf_home = sanitize_env_value(env_values.get("HF_HOME"))
         if not hf_home or hf_home.startswith("$"):
             hf_home = os.path.join(data_root, "hf_cache")
+        docling_cache_dir = sanitize_env_value(env_values.get("DOCLING_CACHE_DIR"))
+        if not docling_cache_dir or docling_cache_dir.startswith("$"):
+            docling_cache_dir = os.path.join(data_root, "docling_cache")
+        docling_artifacts_path = sanitize_env_value(env_values.get("DOCLING_ARTIFACTS_PATH"))
+        if not docling_artifacts_path or docling_artifacts_path.startswith("$"):
+            docling_artifacts_path = os.path.join(data_root, "docling_artifacts")
         Path(hf_home).mkdir(parents=True, exist_ok=True)
         run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", hf_home], required=False)
         run_cmd(["chmod", "-R", "g+rx", hf_home], required=False)
+        Path(docling_cache_dir).mkdir(parents=True, exist_ok=True)
+        run_cmd(
+            ["chown", "-R", f"{service_user}:{nginx_group}", docling_cache_dir],
+            required=False,
+        )
+        run_cmd(["chmod", "-R", "g+rx", docling_cache_dir], required=False)
+        Path(docling_artifacts_path).mkdir(parents=True, exist_ok=True)
+        run_cmd(
+            ["chown", "-R", f"{service_user}:{nginx_group}", docling_artifacts_path],
+            required=False,
+        )
+        run_cmd(["chmod", "-R", "g+rx", docling_artifacts_path], required=False)
         if group_exists("clamav"):
             run_cmd(["usermod", "-aG", "clamav", service_user], required=False)
         if shutil.which("setfacl"):
@@ -602,6 +633,27 @@ except Exception as exc:
         run_cmd(["chown", "-R", f"{service_user}:{nginx_group}", static_root])
         run_cmd(["chmod", "-R", "g+rx", static_root])
         ensure_nginx_traversal(Path(static_root), nginx_group)
+
+        if ask_user("Download Docling model artifacts now?", default=not resume):
+            run_cmd(
+                [
+                    "sudo",
+                    "-u",
+                    service_user,
+                    "env",
+                    f"DATA_ROOT={data_root}",
+                    f"HF_HOME={hf_home}",
+                    f"DOCLING_CACHE_DIR={docling_cache_dir}",
+                    f"DOCLING_ARTIFACTS_PATH={docling_artifacts_path}",
+                    "DOCLING_DEVICE=cpu",
+                    "DOCLING_NUM_THREADS=2",
+                    str(venv_python),
+                    str(repo_root / "deploy" / "docling_model_warmup.py"),
+                    "--env-file",
+                    str(env_path),
+                ],
+                required=True,
+            )
 
         print_step("Database")
         if not skip_migrate:
@@ -655,7 +707,7 @@ ProtectKernelLogs=true
 RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
-ReadWritePaths={data_root} {hf_home} /run/document_refinery
+ReadWritePaths={data_root} {hf_home} {docling_cache_dir} {docling_artifacts_path} /run/document_refinery
 Restart=on-failure
 KillSignal=SIGTERM
 
@@ -687,7 +739,7 @@ ProtectKernelLogs=true
 RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
-ReadWritePaths={data_root} {hf_home}
+ReadWritePaths={data_root} {hf_home} {docling_cache_dir} {docling_artifacts_path}
 Restart=on-failure
 KillSignal=SIGTERM
 

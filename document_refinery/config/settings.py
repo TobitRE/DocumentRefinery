@@ -46,6 +46,16 @@ ALLOWED_HOSTS = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]
 DATA_ROOT = os.environ.get("DATA_ROOT", "/var/lib/docling_service")
 HF_HOME = os.environ.get("HF_HOME", str(Path(DATA_ROOT) / "hf_cache"))
 os.environ.setdefault("HF_HOME", HF_HOME)
+DOCLING_CACHE_DIR = os.environ.get(
+    "DOCLING_CACHE_DIR",
+    str(Path(DATA_ROOT) / "docling_cache"),
+)
+os.environ.setdefault("DOCLING_CACHE_DIR", DOCLING_CACHE_DIR)
+DOCLING_ARTIFACTS_PATH = os.environ.get(
+    "DOCLING_ARTIFACTS_PATH",
+    str(Path(DATA_ROOT) / "docling_artifacts"),
+)
+os.environ.setdefault("DOCLING_ARTIFACTS_PATH", DOCLING_ARTIFACTS_PATH)
 DOCLING_DEVICE = os.environ.get("DOCLING_DEVICE", "cpu")
 DOCLING_NUM_THREADS = int(os.environ.get("DOCLING_NUM_THREADS", "2"))
 os.environ.setdefault("DOCLING_DEVICE", DOCLING_DEVICE)

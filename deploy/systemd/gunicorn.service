@@ -9,8 +9,23 @@ WorkingDirectory=/var/www/document_refinery
 EnvironmentFile=/var/www/document_refinery/.env
 ExecStart=/var/www/document_refinery/venv/bin/gunicorn \
     --workers 3 \
-    --bind unix:/run/document_refinery.sock \
+    --bind unix:/run/document_refinery/document_refinery.sock \
     config.wsgi:application
+RuntimeDirectory=document_refinery
+RuntimeDirectoryMode=0755
+UMask=007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/docling_service /var/lib/docling_service/hf_cache /var/lib/docling_service/docling_cache /var/lib/docling_service/docling_artifacts /run/document_refinery
 Restart=on-failure
 KillSignal=SIGTERM
 

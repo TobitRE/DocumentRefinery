@@ -62,6 +62,8 @@
         <div class="list">
           <span class="status status-{{ runtime_payload.filesystem.data_root.status }}">DATA_ROOT: {{ runtime_payload.filesystem.data_root.status }}</span>
           <span class="status status-{{ runtime_payload.filesystem.hf_home.status }}">HF_HOME: {{ runtime_payload.filesystem.hf_home.status }}</span>
+          <span class="status status-{{ runtime_payload.filesystem.docling_cache_dir.status }}">Docling cache: {{ runtime_payload.filesystem.docling_cache_dir.status }}</span>
+          <span class="status status-{{ runtime_payload.filesystem.docling_artifacts_path.status }}">Docling artifacts: {{ runtime_payload.filesystem.docling_artifacts_path.status }}</span>
           <span class="status status-neutral">Root disk: {{ runtime_payload.filesystem.root.status }}</span>
         </div>
       </div>
@@ -72,8 +74,11 @@
         <div class="list">
           <span class="status status-{{ runtime_payload.tools.ffmpeg.status }}">FFmpeg: {{ runtime_payload.tools.ffmpeg.status }}</span>
           <span class="status status-{{ runtime_payload.tools.tesseract.status }}">Tesseract: {{ runtime_payload.tools.tesseract.status }}</span>
+          <span class="status status-{{ runtime_payload.ocr_backends.docling_base_artifacts.status }}">Docling models: {{ runtime_payload.ocr_backends.docling_base_artifacts.message }}</span>
           <span class="status status-{{ runtime_payload.ocr_backends.rapidocr.status }}">RapidOCR: {{ runtime_payload.ocr_backends.rapidocr.status }}</span>
+          <span class="status status-{{ runtime_payload.ocr_backends.rapidocr_artifacts.status }}">RapidOCR models: {{ runtime_payload.ocr_backends.rapidocr_artifacts.message }}</span>
           <span class="status status-{{ runtime_payload.ocr_backends.easyocr.status }}">EasyOCR: {{ runtime_payload.ocr_backends.easyocr.status }}</span>
+          <span class="status status-{{ runtime_payload.ocr_backends.easyocr_artifacts.status }}">EasyOCR models: {{ runtime_payload.ocr_backends.easyocr_artifacts.message }}</span>
           <span class="status status-{{ runtime_payload.ocr_backends.pytesseract.status }}">pytesseract: {{ runtime_payload.ocr_backends.pytesseract.status }}</span>
         </div>
       </div>
