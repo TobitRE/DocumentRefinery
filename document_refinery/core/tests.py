@@ -23,12 +23,12 @@ class TestInternalTokenGuard(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("docling_version", response.json())
 
-    @patch("core.views.version", return_value="2.96.0")
+    @patch("core.views.version", return_value="2.96.1")
     def test_healthz_reports_docling_package_version(self, mock_version):
         with override_settings(INTERNAL_ENDPOINTS_TOKEN="secret-token"):
             response = self.client.get("/healthz", HTTP_X_INTERNAL_TOKEN="secret-token")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json()["docling_version"], "2.96.0")
+            self.assertEqual(response.json()["docling_version"], "2.96.1")
             mock_version.assert_called_once_with("docling")
 
     def test_healthz_denies_without_configured_token(self):

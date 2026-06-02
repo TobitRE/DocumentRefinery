@@ -210,7 +210,7 @@ def main() -> int:
 
     check_package(reporter, "Django", "5.2.x LTS", lambda value: value.startswith("5.2."))
     check_package(reporter, "redis", "7.x", lambda value: value.startswith("7."))
-    check_package(reporter, "docling", "2.96.0", lambda value: value == "2.96.0")
+    check_package(reporter, "docling", "2.96.1", lambda value: value == "2.96.1")
     check_environment(reporter)
     check_imports(reporter)
     if args.smoke:

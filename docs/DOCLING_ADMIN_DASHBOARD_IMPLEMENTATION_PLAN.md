@@ -12,9 +12,9 @@ keine Asset-Installation und keine Codeaenderungen vorgenommen.
 ### Abhaengigkeiten und Runtime-Ziel
 
 - `requirements.txt` definiert als Ziel `Django>=5.2.14,<5.3`, `redis>=7,<8`
-  und `docling==2.96.0`.
+  und `docling==2.96.1`.
 - `deploy/DOCLING_2_96_UPGRADE.md` bestaetigt: Django bleibt auf `5.2.x` LTS,
-  Redis bleibt auf der Python-Client-Linie `7.x`, Docling-Ziel ist `2.96.0`.
+  Redis bleibt auf der Python-Client-Linie `7.x`, Docling-Ziel ist `2.96.1`.
 - Die lokale Analyseumgebung zeigte noch abweichende installierte Pakete
   (`docling 2.72.0`, `Django 6.0.1`). Der spaetere Implementierungsauftrag muss
   deshalb zuerst einen Dependency-Sanity-Gate gegen `requirements.txt` einplanen,
@@ -187,6 +187,9 @@ bevorzugte Implementierungsweg:
 - JSON-Fallback bleibt erhalten.
 - Strukturierte Controls duerfen nur Optionen anbieten, die der Backend-Code
   validiert und an Docling weitergibt.
+- Optionsschema-Entscheidung: bestehende JSON-Defaults duerfen unbekannte Keys
+  weiter enthalten, werden aber mit Warnungen angezeigt; strukturierte Controls
+  schreiben nur strikt validierte Keys.
 - Effektive Optionen muessen vor Jobstart sichtbar sein.
 - Profile bleiben zunaechst als feste Presets erhalten; ein dynamisches
   Datenbank-Profilmodell wird nicht in der ersten Umbauphase eingefuehrt.
@@ -271,13 +274,13 @@ sind:
 ### Externe Faktenbasis
 
 - Docling PyPI fuehrt am 2026-06-02 `2.96.1` als neueste 2.96.x-Version
-  (Release 2026-06-01) und `2.96.0` (Release 2026-05-28). Das Repository ist
-  lokal auf `docling==2.96.0` geplant.
+  (Release 2026-06-01) und `2.96.0` (Release 2026-05-28). Das Repository wird
+  auf `docling==2.96.1` gepinnt.
 - Docling 2.96.0 changelog-relevant fuer dieses Projekt: threaded
   `docling-parse` PDF backend (v6) und ein Fix fuer JSON Transformers model type.
 - Docling 2.96.1 ist fuer Diagnostics relevant: verbesserte Missing-FFmpeg-Fehler
-  fuer ASR und ein DOCX-Fix. Da DocumentRefinery aktuell PDF-only bleibt, ist
-  das kein Grund fuer neue UI-Funktionen.
+  fuer ASR und ein DOCX-Fix. Diese Fixes werden uebernommen; sie schalten aber
+  ohne Backend-Erweiterung keine ASR- oder DOCX-UI frei.
 - Docling unterstuetzt deutlich mehr Formate und Features als DocumentRefinery
   aktuell absichert. Diese Features duerfen nicht automatisch im Dashboard
   angeboten werden.
@@ -304,11 +307,14 @@ sind:
   OCR-Backends, Celery Worker Concurrency und Redis/Broker.
 - Jobdetails mit Docling-Versionen, effektiven Optionen, Stage-Laufzeiten,
   Result-Metriken und Artefakten.
-- Optionaler echter Chunking-Pfad nur nach separater Entscheidung und Tests.
+- Echter Chunking-Pfad ist als spaetere Erweiterung beschlossen, aber nicht Teil
+  des ersten Tabler-/Optionsschema-Umbaus.
 
 ### Bewusst nicht angebotene Docling-Funktionen
 
-- Multi-format upload bleibt aus der ersten Umsetzung ausgeschlossen.
+- Multi-format Upload ist beschlossen, bleibt aber aus der ersten Umsetzung
+  ausgeschlossen, bis MIME-, Storage-, Security- und Conversion-Backend
+  implementiert sind.
 - ASR/Audio/Video bleibt ausgeschlossen; FFmpeg wird nur diagnostisch angezeigt.
 - VLM-Pipeline bleibt ausgeschlossen, solange keine Ressourcensteuerung,
   Modellverwaltung, Laufzeitbegrenzung und Exportsemantik implementiert sind.
@@ -375,8 +381,9 @@ Geplanter Kompromiss:
 - Neues oder angepasstes Management Command, das dieselbe Shared-Funktion nutzt.
 - `deploy/docling_runtime_check.py` bleibt fuer Server-Upgrades und optionalen
   Smoke erhalten, soll aber perspektivisch die gemeinsame Checklogik verwenden.
-- Echte Smoke-Conversions bleiben Management-Command-/Deploy-Aufgabe und werden
-  im Dashboard nicht automatisch ausgefuehrt.
+- Runtime Smoke ist beschlossen: Die Dashboard-Seite soll eine manuell
+  ausgeloeste, staff-only Smoke-Aktion fuer ein kleines Test-PDF anbieten.
+  Automatische Smoke-Conversions bei normalen Page Loads bleiben ausgeschlossen.
 
 ### Sicherheit
 
@@ -384,8 +391,9 @@ Geplanter Kompromiss:
 - Pfade werden nur als konfigurierte Runtime-Pfade angezeigt, nicht aus
   Request-Parametern gelesen.
 - Teure Checks werden gecacht, z. B. 5 bis 30 Sekunden je nach Check.
-- Smoke-Checks mit PDF-Konvertierung werden nicht ueber normale Dashboard-Loads
-  gestartet.
+- Smoke-Checks mit PDF-Konvertierung brauchen CSRF-geschuetzte Staff-Aktion,
+  Rate-Limit/Lock gegen parallele Laeufe, kurzes Timeout, kleines eingebettetes
+  PDF, klares Ergebnisprotokoll und keine usergesteuerten Eingabedateien.
 
 ## 6. Job- und Artefaktansicht
 
@@ -454,9 +462,11 @@ Geplanter Backend-Schutz:
 
 ## 7. Input-Formate und Sicherheitsgrenzen
 
-### Erste Umsetzung bleibt PDF-only
+### Erste Umsetzung bleibt PDF-first
 
-Die UI bleibt PDF-only, weil das Backend aktuell PDF-spezifisch ist:
+Die erste Umsetzung bleibt PDF-first, weil das Backend aktuell PDF-spezifisch
+ist. Multi-format Upload ist als spaetere Erweiterung beschlossen, aber die UI
+darf neue Formate erst anbieten, wenn der Backend-Flow abgesichert ist:
 
 - `DEFAULT_ALLOWED_UPLOAD_MIME_TYPES` erlaubt nur `application/pdf` und
   `application/x-pdf`.
@@ -466,10 +476,10 @@ Die UI bleibt PDF-only, weil das Backend aktuell PDF-spezifisch ist:
   konfiguriert, wenn Profiloptionen genutzt werden.
 - ClamAV- und Speicherpfade sind auf den aktuellen PDF-Flow abgestimmt.
 
-### Voraussetzungen fuer spaetere neue Formate
+### Beschlossene spaetere Multi-Format-Erweiterung
 
-Neue Formate duerfen erst geplant/implementiert werden, wenn der Backend-Auftrag
-explizit diese Punkte enthaelt:
+Neue Formate duerfen erst implementiert und in der UI angeboten werden, wenn der
+Backend-Auftrag explizit diese Punkte enthaelt:
 
 - MIME-Allowlist pro Format in `authn/options.py`.
 - Dateiendungs- und Storage-Pfad-Mapping ohne feste `.pdf`-Annahme.
@@ -499,9 +509,8 @@ Plan:
 
 - Sicherstellen, dass Runtime und CI gegen `Django>=5.2.14,<5.3`,
   `redis>=7,<8` und Docling 2.96.x laufen.
-- Entscheiden, ob weiter exakt `docling==2.96.0` gepinnt bleibt oder ob
-  `docling>=2.96,<2.97` erlaubt wird. Fuer Produktion ist ein exakter Pin plus
-  geplanter Patch-Upgrade-Prozess vorzuziehen.
+- Docling bleibt fuer Produktion exakt auf `docling==2.96.1` gepinnt. Weitere
+  2.96.x-Patches werden nur als expliziter Dependency-Schritt uebernommen.
 - `deploy/docling_runtime_check.py --json` als maschinenlesbare Quelle fuer
   Runtime Diagnostics vorbereiten oder in Shared-Code ueberfuehren.
 - `core/views.py` kann minimal bleiben; tiefe Diagnostics sollen nicht in
@@ -668,7 +677,7 @@ Betroffene Dateien:
 
 Plan:
 
-- Upload-Form bleibt PDF-only.
+- Upload-Form bleibt in der ersten Umsetzung PDF-only.
 - Profile aus Backend-Endpoint laden.
 - Strukturierte Options-Controls nur anzeigen, wenn Backend-Capability
   `implemented` meldet.
@@ -708,7 +717,7 @@ Plan:
 - Strukturierte Controls werden oberhalb der JSON-Textarea hinzugefuegt.
 - UI schreibt weiterhin ein JSON-Payload, aber nur ueber vom Backend validierte
   Keys.
-- MIME-Controls bleiben PDF-only.
+- MIME-Controls bleiben in der ersten Umsetzung PDF-only.
 - Sichtbare Hinweise:
   - JSON-Fallback wird angewendet, wenn strukturierte Controls nicht alle
     Optionen abdecken.
@@ -735,7 +744,9 @@ Plan:
   - FFmpeg fehlt
   - keine Worker online
   - Broker down
-- Keine Buttons fuer teure Smoke-Conversions in der ersten Umsetzung.
+- Staff-only Smoke-Aktion mit explizitem Button, Lock/Rate-Limit, kurzem Timeout
+  und Ergebnisprotokoll. Die Aktion nutzt ein kleines internes Test-PDF und
+  keine hochgeladenen Dateien.
 
 ## 10. Teststrategie
 
@@ -749,7 +760,8 @@ Implementierung ist diese Testabdeckung geplant:
   - erlaubte Exporte
   - Legacy-Mapping fuer `ocr`/`ocr_languages`
   - ungueltige OCR Engine
-  - MIME weiterhin PDF-only
+  - MIME in der ersten Umsetzung weiterhin PDF-only; spaetere Multi-Format-
+    Erweiterung erhaelt eigene Format-Tests
 - `document_refinery/documents/tests/test_pipeline.py`
   - alle Profile bauen valide `PdfPipelineOptions`
   - effektive Optionen werden in Pipeline-Optionen umgesetzt
@@ -773,9 +785,12 @@ Implementierung ist diese Testabdeckung geplant:
 - Staff-only Zugriff bleibt fuer Web-Dashboard.
 - Tabler-Basislayout rendert Navigation und aktive Seiten.
 - API-Key-Seiten zeigen strukturierte Controls plus JSON-Fallback.
-- Upload-Seite bleibt PDF-only.
+- Upload-Seite bleibt in der ersten Umsetzung PDF-only und zeigt keine neuen
+  Format-Controls ohne Backend-Capability.
 - Profile-Seite unterscheidet `implemented`, `planned`, `not_offered`.
 - Runtime-Seite zeigt Warnungen bei gemocktem Version mismatch.
+- Runtime-Seite zeigt die manuelle Smoke-Aktion nur fuer Staff an und rendert
+  Ergebnis, Timeout und Fehlerstatus.
 
 ### Pipeline Smoke
 
@@ -783,6 +798,8 @@ Implementierung ist diese Testabdeckung geplant:
 - Optional ein OCR-Profil, aber nur wenn `HF_HOME` beschreibbar ist und
   Modelcache-Verhalten geklaert wurde.
 - Kein ASR/VLM-Smoke in der ersten Dashboard-Umsetzung.
+- Dashboard-Runtime-Smoke nutzt ein kleines internes PDF, darf nicht parallel
+  mehrfach laufen und muss bei Timeout sauber abbrechen.
 
 ### Browser Smoke
 
@@ -793,7 +810,7 @@ Implementierung ist diese Testabdeckung geplant:
   - `/dashboard/api-keys/new/`
 - Pruefung auf sichtbare Navigation, keine JS-Fehler, responsive Layouts.
 
-## 11. Risiken und offene Entscheidungen
+## 11. Risiken, Entscheidungen und spaetere TODOs
 
 ### Risiken
 
@@ -815,29 +832,43 @@ Implementierung ist diese Testabdeckung geplant:
   schwer nachvollziehbare effektive Optionen.
 - Artefaktvorschau kann grosse Dateien laden; Preview braucht harte Limits.
 
-### Offene Entscheidungen
+### Festgelegte Entscheidungen
 
-- Tabler Free/MIT vs Pro. Empfehlung: Free/MIT fuer erste Umsetzung.
-- Asset-Strategie. Empfehlung: vendored compiled static bundle, kein CDN.
-- Docling-Pin. Empfehlung: erst `docling==2.96.0` aus bestehendem Plan
-  verifizieren; Patch-Update auf `2.96.1` nur als separater Dependency-Schritt.
-- Optionsschema: unbekannte JSON-Keys weiter akzeptieren und warnen oder
-  kuenftig rejecten. Empfehlung: fuer bestehende Defaults warnen, fuer
-  strukturierte Controls strikt validieren.
-- Tenant-Defaults: eigene Tenant-Seite oder zunaechst API-Key-Detail erweitern.
-- Echte Chunking-Implementierung ja/nein. Empfehlung: nicht im Tabler-Umbau
-  verstecken, sondern separat entscheiden.
-- Echte VLM-Unterstuetzung ja/nein. Empfehlung: separat entscheiden, da
-  Ressourcensteuerung und Modellverwaltung noetig sind.
-- Multi-format Upload ja/nein. Empfehlung: PDF-only fuer erste Umsetzung.
-- Runtime Smoke im Dashboard ja/nein. Empfehlung: nein, nur Management Command.
+- Tabler: Free/MIT.
+- Asset-Strategie: vendored compiled static bundle, kein CDN.
+- Docling-Pin: `docling==2.96.1`.
+- Optionsschema: bestehende JSON-Defaults bleiben kompatibel und zeigen
+  Warnungen fuer unbekannte Keys; strukturierte Controls schreiben nur strikt
+  validierte Keys.
+- Echte Chunking-Integration: ja, aber spaeterer Auftrag.
+- Echte VLM-Unterstuetzung: ja, aber spaeterer Auftrag.
+- Multi-format Upload: ja, aber spaeterer Auftrag nach Backend-/Security-
+  Absicherung.
+- Runtime Smoke im Dashboard: ja, als manuelle staff-only Aktion mit Lock,
+  Rate-Limit, Timeout und internem Test-PDF.
+
+### TODO-Liste fuer spaeter
+
+- Tenant-Defaults als eigene Seite oder zunaechst nur API-Key-Detail-Erweiterung
+  entscheiden.
+- Echte Chunking-Integration planen: Chunker-Auswahl, Output-Schema,
+  Artefaktart, Preview, Tests und Abgrenzung zum bestehenden `chunks_json`
+  Compatibility Payload.
+- Echte VLM-Unterstuetzung planen: Pipeline-Auswahl, Modellkatalog, Cache-
+  Vorwaermung, Ressourcenlimits, Timeouts, Kostenhinweise, Artefakte und Tests.
+- Multi-format Upload planen: DOCX/PPTX/XLSX/HTML/Bild/Audio-Scope,
+  MIME-/Extension-Mapping, Storage-Pfade, Security Review, Converter-
+  `allowed_formats`, Format-spezifische Tests und UI-Kennzeichnung.
+- Runtime Smoke finalisieren: Endpoint- oder Form-POST-Design, Staff-Auth,
+  CSRF, Locking, Timeout, Ergebnisprotokoll und Deploy-Abgleich mit
+  `deploy/docling_runtime_check.py`.
 
 ## 12. Umsetzungsreihenfolge
 
 ### Schritt 0: Dependency- und Runtime-Sanity
 
 - Runtime gegen `requirements.txt` abgleichen.
-- Docling-2.96.x-Upgradepfad aus `deploy/DOCLING_2_96_UPGRADE.md` verifizieren.
+- Docling-2.96.1-Upgradepfad aus `deploy/DOCLING_2_96_UPGRADE.md` verifizieren.
 - `deploy/docling_runtime_check.py --json` als spaetere Diagnostics-Basis
   bewerten.
 - Keine UI-Funktionen fuer Docling 2.96.x freischalten, solange Runtime mismatch
@@ -863,6 +894,7 @@ Implementierung ist diese Testabdeckung geplant:
 
 - Shared Runtime Check Service bauen.
 - `/v1/dashboard/runtime` und `/dashboard/runtime/` vorbereiten.
+- Manuelle staff-only Runtime-Smoke-Aktion mit internem Test-PDF vorbereiten.
 - Bestehendes `/dashboard/system` nicht ueberfrachten; Runtime getrennt halten.
 - Tests mit Mocks schreiben.
 
@@ -876,7 +908,7 @@ Implementierung ist diese Testabdeckung geplant:
 
 ### Schritt 5: Tabler Basislayout
 
-- Tabler Asset-Entscheidung final treffen.
+- Tabler Free/MIT als vendored compiled static bundle einbinden.
 - `base.html` auf Tabler umstellen.
 - Gemeinsame CSS/JS-Dateien auslagern.
 - Navigation fuer Zielseiten anlegen.
@@ -886,6 +918,7 @@ Implementierung ist diese Testabdeckung geplant:
 
 - `/dashboard/` als Tabler Overview umsetzen.
 - `/dashboard/runtime/` als neue Diagnostics-Seite umsetzen.
+- Runtime-Smoke-Button mit Lock/Timeout und Ergebnisanzeige einbinden.
 - Worker, Broker, Versions- und Cache-Warnungen sichtbar machen.
 
 ### Schritt 7: Upload, Jobs und Artefakte migrieren
@@ -906,17 +939,25 @@ Implementierung ist diese Testabdeckung geplant:
 
 - Strukturierte Docling-Defaults in API-Key-Formulare integrieren.
 - JSON-Fallback als Advanced-Bereich behalten.
-- PDF-only MIME-Grenzen klar anzeigen.
+- PDF-first MIME-Grenzen klar anzeigen; Multi-Format-Erweiterung nicht ohne
+  Backend-Capability freischalten.
 - Optional Tenant-Defaults als eigene Seite.
 
 ### Schritt 10: Abschlussverifikation
 
 - Unit- und API-Tests.
-- Kleiner PDF-Smoke nach Docling-2.96.x-Runtime.
+- Kleiner PDF-Smoke nach Docling-2.96.1-Runtime.
 - Optional Browser-Smoke fuer zentrale Dashboard-Seiten.
 - Docs aktualisieren: `API_INTEGRATION.md`, `ENDPOINTS.md`,
   `deploy/DOCLING_2_96_UPGRADE.md`, falls Implementierung Felder oder Endpunkte
   aendert.
+
+### Schritt 11: Spaetere beschlossene Erweiterungen planen
+
+- Echte Chunking-Integration als separaten Implementierungsauftrag ausarbeiten.
+- Echte VLM-Unterstuetzung als separaten Implementierungsauftrag ausarbeiten.
+- Multi-format Upload als separaten Implementierungsauftrag ausarbeiten.
+- Tenant-Defaults-Seitenumfang final entscheiden.
 
 ## Quellen und lokale Grundlage
 

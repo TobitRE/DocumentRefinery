@@ -1,6 +1,6 @@
 # Docling 2.96 Upgrade
 
-Diese Anleitung beschreibt das Server-Upgrade von `docling==2.72.0` auf `docling==2.96.0`.
+Diese Anleitung beschreibt das Server-Upgrade von `docling==2.72.0` auf `docling==2.96.1`.
 Redis bleibt auf der Python-Client-Linie `7.x`; Django bleibt auf `5.2.x` LTS.
 
 ## Zielversionen
@@ -10,7 +10,7 @@ Die relevanten Constraints stehen in `requirements.txt`:
 ```txt
 Django>=5.2.14,<5.3
 redis>=7,<8
-docling==2.96.0
+docling==2.96.1
 ```
 
 ## Vor dem Update
@@ -84,6 +84,9 @@ export DOCLING_NUM_THREADS=2
 
 - `partial_success` von Docling wird als fehlgeschlagene Konvertierung behandelt. Das verhindert,
   dass unvollständige Artefakte als erfolgreich veröffentlicht werden.
+- `docling==2.96.1` enthält die 2.96.0-Änderungen und zusätzlich Fixes für
+  aussagekräftigere FFmpeg-Fehler bei ASR sowie DOCX-Text-Erhalt. DocumentRefinery
+  bleibt bis zur geplanten Multi-Format-Erweiterung trotzdem PDF-first.
 - Exportfehler werden separat als `DOCLING_EXPORT_FAILED` gespeichert.
 - `chunks_json` nutzt weiterhin DocTags-Inhalt, verwendet aber die aktuelle
   `export_to_doctags()`-API statt der deprecated Document-Token-Methode.

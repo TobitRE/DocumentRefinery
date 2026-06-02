@@ -182,15 +182,24 @@ Plan fuer Umstieg von bestehenden Templates auf Tabler:
 
 ### Risiken und Entscheidungen
 
-Offene Entscheidungen:
+Festgelegte Entscheidungen:
 
-- Tabler Free vs Pro
-- Asset-Einbindung
-- PDF-only vs weitere Formate
-- echte VLM-Unterstuetzung ja/nein
-- echtes Chunking ja/nein
-- wie viel Optionsfreiheit fuer Tenant/API-Key erlaubt wird
-- wie Runtime Checks abgesichert werden
+- Tabler Free/MIT
+- Tabler als vendored compiled static bundle, kein CDN
+- Docling-Pin: `docling==2.96.1`
+- Optionsschema: bestehende JSON-Defaults bleiben kompatibel und warnen bei unbekannten Keys; strukturierte Controls schreiben nur strikt validierte Keys
+- Multi-format Upload ja, aber als spaeterer Backend-/Security-Auftrag
+- echte VLM-Unterstuetzung ja, aber als spaeterer Auftrag
+- echtes Chunking ja, aber als spaeterer Auftrag
+- Runtime Smoke im Dashboard ja, als manuelle staff-only Aktion mit Lock, Rate-Limit, Timeout und internem Test-PDF
+
+TODO-Liste fuer spaeter:
+
+- Multi-format Upload: MIME-/Extension-Mapping, Storage-Pfade, Security Review, Formatoptionen, Tests und UI-Kennzeichnung planen
+- echte VLM-Unterstuetzung: Modellkatalog, Ressourcenlimits, Timeouts, Cache-Vorwaermung, Artefakte und Tests planen
+- echtes Chunking: Chunker-Auswahl, Output-Schema, Artefaktart, Preview und Tests planen
+- Runtime Smoke: Endpoint-/Form-POST-Design, CSRF, Locking, Timeout und Ergebnisprotokoll finalisieren
+- Tenant-Defaults-Seitenumfang final entscheiden
 
 Erwartete Migrationsrisiken:
 
@@ -208,4 +217,3 @@ Erwartete Migrationsrisiken:
 - Der Plan haelt Django LTS und Redis 7 unveraendert.
 - Der Plan beschreibt Tests und Risiken.
 - Der Plan ist so konkret, dass danach ein separater Implementierungsauftrag ausgefuehrt werden kann.
-
