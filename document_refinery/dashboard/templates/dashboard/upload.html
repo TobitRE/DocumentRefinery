@@ -47,6 +47,7 @@
                 <input type="checkbox" id="uploadIngest" checked />
                 Start ingestion
               </label>
+              <span class="status status-warn">Starting ingestion can create tenant-billed Docling work.</span>
             </div>
             {% include "dashboard/_docling_options_controls.html" with json_target="uploadOptionsJson" profiles=profiles %}
             <details class="collapse" open>
@@ -68,7 +69,7 @@
             <div class="dr-section-heading">
               <div>
                 <h3 class="card-title">Existing documents</h3>
-                <div class="muted">Run another job from an already uploaded document using the selected profile and options above.</div>
+                <div class="muted">Run another job from an already uploaded document using the selected profile and options above. New runs can create tenant-billed Docling work.</div>
               </div>
               <button type="button" class="ghost" data-documents-refresh>Refresh</button>
             </div>
@@ -78,6 +79,7 @@
                   <tr>
                     <th>Document</th>
                     <th>Status</th>
+                    <th>Origin</th>
                     <th>Latest job</th>
                     <th>Jobs</th>
                     <th></th>
@@ -85,7 +87,7 @@
                 </thead>
                 <tbody data-documents-table>
                   <tr>
-                    <td colspan="5" class="text-muted">Select a dashboard key to load documents.</td>
+                    <td colspan="6" class="text-muted">Select a dashboard key to load documents.</td>
                   </tr>
                 </tbody>
               </table>

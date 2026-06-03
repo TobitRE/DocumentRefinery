@@ -38,6 +38,24 @@
             <div class="muted">Docling</div>
             <div class="mono">{{ job.docling_version|default:"-" }}</div>
           </div>
+          <div class="panel">
+            <div class="muted">Origin</div>
+            {% if job.created_via == "DASHBOARD" %}
+              <div><span class="status status-warn">Dashboard run</span></div>
+              {% if job.created_by_user %}
+                <div class="muted">{{ job.created_by_user.get_username }}</div>
+              {% endif %}
+            {% else %}
+              <div><span class="status status-neutral">Public API</span></div>
+            {% endif %}
+          </div>
+          <div class="panel">
+            <div class="muted">Dashboard action</div>
+            <div class="mono">{{ job.dashboard_last_action_at|date:"Y-m-d H:i"|default:"-" }}</div>
+            {% if job.dashboard_last_action_by %}
+              <div class="muted">{{ job.dashboard_last_action_by.get_username }}</div>
+            {% endif %}
+          </div>
         </div>
       </div>
     </section>
@@ -48,6 +66,7 @@
           <div>
             <h2 class="card-title">Run this document again</h2>
             <div class="muted">Create a new job from document #{{ job.document_id }} or retry this failed job when possible.</div>
+            <div class="status status-warn" style="margin-top: .5rem;">These actions can start new Docling work for the selected tenant context.</div>
           </div>
           <div class="actions">
             <button

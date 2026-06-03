@@ -114,8 +114,11 @@ body {
 .status {
   font-size: .75rem;
   line-height: 1.25;
+  max-width: 100%;
   min-height: 1.75rem;
+  overflow-wrap: anywhere;
   padding-block: .3125rem;
+  white-space: normal;
 }
 
 .status-ok,

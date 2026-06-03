@@ -20,6 +20,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "mime_type",
             "size_bytes",
             "status",
+            "created_via",
             "page_count",
             "created_at",
         )
@@ -90,6 +91,8 @@ class JobSerializer(serializers.ModelSerializer):
             "comparison_id",
             "status",
             "stage",
+            "created_via",
+            "dashboard_last_action_at",
             "queued_at",
             "started_at",
             "finished_at",

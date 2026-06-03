@@ -24,6 +24,7 @@ from django.db import IntegrityError
 from .models import (
     Artifact,
     ArtifactKind,
+    CreationSource,
     Document,
     IngestionJob,
     IngestionJobStatus,
@@ -190,14 +191,20 @@ def _create_ingestion_job(
     *,
     options_json: dict,
     profile: str | None,
+    comparison_id=None,
     source_relpath: str = "",
+    created_via: str = CreationSource.API,
+    created_by_user=None,
 ) -> IngestionJob:
     return IngestionJob.objects.create(
         tenant=api_key.tenant,
         created_by_key=api_key,
+        created_via=created_via,
+        created_by_user=created_by_user,
         document=document,
         external_uuid=document.external_uuid,
         profile=profile,
+        comparison_id=comparison_id,
         source_relpath=source_relpath,
         status=IngestionJobStatus.QUEUED,
         stage=IngestionStage.SCANNING,
@@ -395,6 +402,7 @@ def _retry_job(
     *,
     source_relpath: str | None = None,
     source_abs_path: str | None = None,
+    dashboard_action_user=None,
 ) -> Response:
     if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
         if source_abs_path:
@@ -450,12 +458,29 @@ def _retry_job(
 
     _discard_stashed_artifacts(stashed_artifacts)
     job.refresh_from_db()
+    if dashboard_action_user:
+        job.dashboard_last_action_at = timezone.now()
+        job.dashboard_last_action_by = dashboard_action_user
+        job.save(
+            update_fields=[
+                "dashboard_last_action_at",
+                "dashboard_last_action_by",
+                "modified_at",
+            ]
+        )
     if job.status == IngestionJobStatus.QUEUED and job.stage == IngestionStage.SCANNING:
         queue_job_webhooks(job, prev_status, prev_stage)
     return Response(JobSerializer(job).data)
 
 
-def create_document_for_api_key(api_key, data, request) -> Response:
+def create_document_for_api_key(
+    api_key,
+    data,
+    request,
+    *,
+    created_via: str = CreationSource.API,
+    created_by_user=None,
+) -> Response:
     serializer = DocumentUploadSerializer(data=data)
     serializer.is_valid(raise_exception=True)
 
@@ -505,6 +530,8 @@ def create_document_for_api_key(api_key, data, request) -> Response:
     doc = Document(
         tenant=api_key.tenant,
         created_by_key=api_key,
+        created_via=created_via,
+        created_by_user=created_by_user,
         external_uuid=external_uuid,
         original_filename=filename,
         mime_type=content_type or "application/pdf",
@@ -570,6 +597,8 @@ def create_document_for_api_key(api_key, data, request) -> Response:
             doc,
             options_json=options_json,
             profile=profile,
+            created_via=created_via,
+            created_by_user=created_by_user,
         )
         job_id = job.id
         try:
@@ -586,7 +615,14 @@ def create_document_for_api_key(api_key, data, request) -> Response:
     return Response(payload, status=status.HTTP_201_CREATED)
 
 
-def ingest_document_for_api_key(api_key, document_uuid, data) -> Response:
+def ingest_document_for_api_key(
+    api_key,
+    document_uuid,
+    data,
+    *,
+    created_via: str = CreationSource.API,
+    created_by_user=None,
+) -> Response:
     serializer = DocumentIngestSerializer(data=data)
     serializer.is_valid(raise_exception=True)
 
@@ -649,7 +685,12 @@ def ingest_document_for_api_key(api_key, document_uuid, data) -> Response:
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if retry_job.attempt >= retry_job.max_retries:
-            return _retry_job(retry_job)
+            return _retry_job(
+                retry_job,
+                dashboard_action_user=created_by_user
+                if created_via == CreationSource.DASHBOARD
+                else None,
+            )
         source = _copy_document_source_for_job(document)
         if not source:
             return _missing_source_response()
@@ -657,6 +698,9 @@ def ingest_document_for_api_key(api_key, document_uuid, data) -> Response:
             retry_job,
             source_relpath=source[0],
             source_abs_path=source[1],
+            dashboard_action_user=created_by_user
+            if created_via == CreationSource.DASHBOARD
+            else None,
         )
         if retry_response.status_code != status.HTTP_200_OK:
             return retry_response
@@ -682,6 +726,8 @@ def ingest_document_for_api_key(api_key, document_uuid, data) -> Response:
         options_json=options_json,
         profile=profile,
         source_relpath=source_relpath,
+        created_via=created_via,
+        created_by_user=created_by_user,
     )
     try:
         start_ingestion_pipeline(job.id)
@@ -701,25 +747,37 @@ def ingest_document_for_api_key(api_key, document_uuid, data) -> Response:
     )
 
 
-def retry_job_for_api_key(api_key, job_id) -> Response:
+def retry_job_for_api_key(api_key, job_id, *, dashboard_action_user=None) -> Response:
     if not _has_any_scope(api_key, {"jobs:write"}):
         return _scope_denied_response()
     job = IngestionJob.objects.filter(tenant=api_key.tenant, pk=job_id).first()
     if not job:
         return Response(status=status.HTTP_404_NOT_FOUND)
     if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
-        return _retry_job(job)
+        return _retry_job(job, dashboard_action_user=dashboard_action_user)
     if job.attempt >= job.max_retries:
-        return _retry_job(job)
+        return _retry_job(job, dashboard_action_user=dashboard_action_user)
     source = _copy_document_source_for_job(job.document)
     if source:
-        return _retry_job(job, source_relpath=source[0], source_abs_path=source[1])
+        return _retry_job(
+            job,
+            source_relpath=source[0],
+            source_abs_path=source[1],
+            dashboard_action_user=dashboard_action_user,
+        )
     if job.source_relpath and os.path.exists(os.path.join(settings.DATA_ROOT, job.source_relpath)):
-        return _retry_job(job)
+        return _retry_job(job, dashboard_action_user=dashboard_action_user)
     return _missing_source_response()
 
 
-def compare_document_for_api_key(api_key, document_id, data) -> Response:
+def compare_document_for_api_key(
+    api_key,
+    document_id,
+    data,
+    *,
+    created_via: str = CreationSource.API,
+    created_by_user=None,
+) -> Response:
     document = Document.objects.filter(tenant=api_key.tenant, pk=document_id).first()
     if not document:
         return Response(status=status.HTTP_404_NOT_FOUND)
@@ -766,18 +824,15 @@ def compare_document_for_api_key(api_key, document_id, data) -> Response:
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         shutil.copy2(source_abs, abs_path)
 
-        job = IngestionJob.objects.create(
-            tenant=api_key.tenant,
-            created_by_key=api_key,
-            document=document,
-            external_uuid=document.external_uuid,
+        job = _create_ingestion_job(
+            api_key,
+            document,
+            options_json=options_json,
             profile=profile,
             comparison_id=comparison_id,
             source_relpath=relpath,
-            status=IngestionJobStatus.QUEUED,
-            stage=IngestionStage.SCANNING,
-            queued_at=timezone.now(),
-            options_json=options_json or {},
+            created_via=created_via,
+            created_by_user=created_by_user,
         )
         created_jobs.append(job)
         created_source_paths_by_job[job.id] = abs_path

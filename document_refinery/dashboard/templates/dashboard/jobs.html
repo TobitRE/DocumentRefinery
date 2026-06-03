@@ -70,6 +70,7 @@
               <th>Status</th>
               <th>Stage</th>
               <th>Profile</th>
+              <th>Origin</th>
               <th>Tenant</th>
               <th>Document</th>
               <th>Comparison</th>
@@ -85,6 +86,22 @@
                 <td><span class="status status-neutral">{{ job.status }}</span></td>
                 <td><span class="status status-neutral">{{ job.stage }}</span></td>
                 <td><span class="mono">{{ job.profile|default:"-" }}</span></td>
+                <td>
+                  {% if job.created_via == "DASHBOARD" %}
+                    <span class="status status-warn">Dashboard run</span>
+                    {% if job.created_by_user %}
+                      <div class="muted">{{ job.created_by_user.get_username }}</div>
+                    {% endif %}
+                  {% else %}
+                    <span class="status status-neutral">API</span>
+                  {% endif %}
+                  {% if job.dashboard_last_action_at %}
+                    <div class="muted">Dashboard action {{ job.dashboard_last_action_at|date:"Y-m-d H:i" }}</div>
+                    {% if job.dashboard_last_action_by %}
+                      <div class="muted">{{ job.dashboard_last_action_by.get_username }}</div>
+                    {% endif %}
+                  {% endif %}
+                </td>
                 <td>{{ job.tenant.name }}</td>
                 <td>
                   <span class="mono">#{{ job.document_id }}</span><br />
@@ -118,12 +135,13 @@
               </tr>
             {% empty %}
               <tr>
-                <td colspan="10" class="text-muted">No jobs match the current filters.</td>
+                <td colspan="11" class="text-muted">No jobs match the current filters.</td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      <div class="status status-warn" style="margin-top: .75rem;">Run again and retry can start new Docling work for the selected tenant context.</div>
       <div class="muted" data-job-action-status>No job action submitted.</div>
       <pre class="metrics dr-json-preview" data-job-action-result>No job action yet.</pre>
     </div>

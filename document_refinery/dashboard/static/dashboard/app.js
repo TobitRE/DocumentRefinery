@@ -132,7 +132,7 @@
   async function dashboardFetch(path, options = {}, root = document) {
     const method = (options.method || "GET").toUpperCase();
     const apiKeyId = getDashboardKeyId(root);
-    if (!apiKeyId) throw new Error("Select a dashboard test key first.");
+    if (!apiKeyId) throw new Error("Select a tenant context key first.");
 
     const headers = options.headers ? { ...options.headers } : {};
     let body = options.body;
@@ -181,6 +181,24 @@
     });
   }
 
+  function renderDashboardBillingStatus(target, key) {
+    if (!target) return;
+    target.innerHTML = "";
+    if (!key) return;
+    const count = Number(key.dashboard_billable_actions_30d || 0);
+    const node = document.createElement("span");
+    node.className = count > 0 ? "status status-warn" : "status status-neutral";
+    if (count > 0) {
+      const last = key.dashboard_billable_last_at
+        ? ` Last: ${new Date(key.dashboard_billable_last_at).toLocaleString()}`
+        : "";
+      node.textContent = `${count} potentially billable dashboard action${count === 1 ? "" : "s"} in the last 30 days.${last}`;
+    } else {
+      node.textContent = "No potentially billable dashboard actions recorded in the last 30 days.";
+    }
+    target.appendChild(node);
+  }
+
   function syncTenantActionAvailability(selectedKey) {
     qsa("[data-action-tenant-id]").forEach((btn) => {
       const requiredTenantId = btn.dataset.actionTenantId;
@@ -189,7 +207,7 @@
       const missingScope = requiredScope && !(selectedKey?.scopes || []).includes(requiredScope);
       btn.disabled = Boolean(tenantMismatch || missingScope);
       if (tenantMismatch) {
-        btn.title = "Select a dashboard key for this tenant to enable this action.";
+        btn.title = "Select a tenant context key for this tenant to enable this action.";
       } else if (missingScope) {
         btn.title = `Selected key needs ${requiredScope}.`;
       } else {
@@ -230,7 +248,7 @@
         keys.forEach((key) => {
           const option = document.createElement("option");
           option.value = key.id;
-          option.textContent = `${key.is_dashboard_test_key ? "Test - " : ""}${key.name} / ${key.tenant_name} (${key.prefix})`;
+          option.textContent = `${key.is_dashboard_test_key ? "Test context - " : ""}${key.name} / ${key.tenant_name} (${key.prefix})`;
           option.selected = String(key.id) === String(selectedId);
           select.appendChild(option);
         });
@@ -243,6 +261,10 @@
           ? `Using ${selectedKey.name} for tenant ${selectedKey.tenant_name}.`
           : "Create an active API key before using dashboard actions.",
         context
+      );
+      renderDashboardBillingStatus(
+        qs("[data-dashboard-billing-status]", context),
+        selectedKey
       );
       renderDashboardKeyScopes(qs("[data-dashboard-context-scopes]", context), selectedKey);
       syncTenantActionAvailability(selectedKey);
@@ -620,7 +642,7 @@
     table.innerHTML = "";
     if (!documents.length) {
       const row = document.createElement("tr");
-      row.innerHTML = '<td colspan="5" class="text-muted">No documents found for the selected key.</td>';
+      row.innerHTML = '<td colspan="6" class="text-muted">No documents found for the selected key.</td>';
       table.appendChild(row);
       return;
     }
@@ -634,6 +656,7 @@
           <span class="muted mono">${item.uuid}</span>
         </td>
         <td><span class="${statusClass(item.status)}">${item.status}</span></td>
+        <td><span class="${item.created_via === "DASHBOARD" ? "status status-warn" : "status status-neutral"}">${item.created_via === "DASHBOARD" ? "Dashboard" : "API"}</span></td>
         <td>${latest ? `<a href="/dashboard/jobs/${latest.id}/">#${latest.id}</a> <span class="${statusClass(latest.status)}">${latest.status}</span>` : '<span class="muted">-</span>'}</td>
         <td class="mono">${item.job_count || 0}</td>
         <td>

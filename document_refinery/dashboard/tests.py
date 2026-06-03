@@ -13,13 +13,20 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from authn.models import APIKey, Tenant
+from dashboard.models import DashboardActionAudit
 from dashboard import web_views
 from dashboard.runtime import (
     SMOKE_LOCK_FILENAME,
     SMOKE_RATE_FILENAME,
     run_runtime_smoke,
 )
-from documents.models import Document, IngestionJob, IngestionJobStatus, IngestionStage
+from documents.models import (
+    CreationSource,
+    Document,
+    IngestionJob,
+    IngestionJobStatus,
+    IngestionStage,
+)
 from documents.models import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint
 
 
@@ -550,8 +557,30 @@ class TestDashboardStaffActions(TestCase):
         payload = response.json()
         self.assertEqual(payload["default_key_id"], self.api_key.id)
         self.assertTrue(payload["keys"][0]["is_dashboard_test_key"])
+        self.assertEqual(payload["keys"][0]["dashboard_billable_actions_30d"], 0)
+
+    def test_dashboard_context_includes_tenant_billable_action_summary(self):
+        DashboardActionAudit.objects.create(
+            tenant=self.tenant,
+            api_key=self.api_key,
+            created_by_user=self.user,
+            action=DashboardActionAudit.Action.DOCUMENT_INGEST,
+            potentially_billable=True,
+            tenant_name=self.tenant.name,
+            api_key_name=self.api_key.name,
+            api_key_prefix=self.api_key.prefix,
+        )
+
+        response = self.client.get("/dashboard/api/context")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["keys"][0]["dashboard_billable_actions_30d"], 1)
+        self.assertIsNotNone(payload["keys"][0]["dashboard_billable_last_at"])
 
     def test_dashboard_documents_lists_selected_tenant_documents(self):
+        self.api_key.last_used_at = None
+        self.api_key.save(update_fields=["last_used_at"])
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = self._make_document_with_clean_source(tmpdir)
             response = self.client.get(f"/dashboard/api/documents/?api_key_id={self.api_key.id}")
@@ -560,6 +589,9 @@ class TestDashboardStaffActions(TestCase):
         payload = response.json()
         self.assertEqual(payload["documents"][0]["id"], doc.id)
         self.assertEqual(payload["documents"][0]["job_count"], 0)
+        self.assertEqual(payload["documents"][0]["created_via"], CreationSource.API)
+        self.api_key.refresh_from_db()
+        self.assertIsNone(self.api_key.last_used_at)
 
     def test_dashboard_upload_duplicate_returns_existing_document_by_default(self):
         content = b"%PDF-1.4 duplicate\n"
@@ -591,6 +623,12 @@ class TestDashboardStaffActions(TestCase):
         self.assertTrue(payload["duplicate"])
         self.assertEqual(payload["document"]["id"], existing_doc.id)
         self.assertEqual(payload["latest_job"]["id"], latest_job.id)
+        audit = DashboardActionAudit.objects.get(
+            action=DashboardActionAudit.Action.DOCUMENT_DUPLICATE_REUSE
+        )
+        self.assertEqual(audit.document_id, existing_doc.id)
+        self.assertFalse(audit.potentially_billable)
+        self.assertEqual(audit.created_by_user_id, self.user.id)
 
     def test_dashboard_existing_document_can_create_new_job(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -614,6 +652,14 @@ class TestDashboardStaffActions(TestCase):
             self.assertEqual(job.document_id, doc.id)
             self.assertEqual(job.profile, "fast_text")
             self.assertTrue(job.source_relpath)
+            self.assertEqual(job.created_via, CreationSource.DASHBOARD)
+            self.assertEqual(job.created_by_user_id, self.user.id)
+            audit = DashboardActionAudit.objects.get(
+                action=DashboardActionAudit.Action.DOCUMENT_INGEST
+            )
+            self.assertEqual(audit.document_id, doc.id)
+            self.assertEqual(audit.job_id, job.id)
+            self.assertTrue(audit.potentially_billable)
             start_mock.assert_called_once_with(job.id)
 
     def test_dashboard_failed_job_can_be_retried(self):
@@ -642,6 +688,11 @@ class TestDashboardStaffActions(TestCase):
             self.assertEqual(job.status, IngestionJobStatus.QUEUED)
             self.assertEqual(job.stage, IngestionStage.SCANNING)
             self.assertEqual(job.attempt, 2)
+            self.assertEqual(job.dashboard_last_action_by_id, self.user.id)
+            self.assertIsNotNone(job.dashboard_last_action_at)
+            audit = DashboardActionAudit.objects.get(action=DashboardActionAudit.Action.JOB_RETRY)
+            self.assertEqual(audit.job_id, job.id)
+            self.assertTrue(audit.potentially_billable)
             start_mock.assert_called_once_with(job.id)
 
     def test_dashboard_jobs_uses_selected_key_scope(self):
@@ -661,6 +712,7 @@ class TestDashboardStaffActions(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["jobs"][0]["id"], job.id)
+        self.assertEqual(payload["jobs"][0]["created_via"], CreationSource.API)
 
 
 class TestRuntimeSmokeGuards(TestCase):

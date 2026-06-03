@@ -32,6 +32,11 @@ class IngestionStage(models.TextChoices):
     FINALIZING = "FINALIZING", "Finalizing"
 
 
+class CreationSource(models.TextChoices):
+    API = "API", "Public API"
+    DASHBOARD = "DASHBOARD", "Dashboard"
+
+
 class ArtifactKind(models.TextChoices):
     DOCLING_JSON = "docling_json", "Docling JSON"
     MARKDOWN = "markdown", "Markdown"
@@ -45,6 +50,18 @@ class Document(BaseModel):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="documents")
     created_by_key = models.ForeignKey(
         APIKey, on_delete=models.PROTECT, related_name="documents_created"
+    )
+    created_via = models.CharField(
+        max_length=20,
+        choices=CreationSource.choices,
+        default=CreationSource.API,
+    )
+    created_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dashboard_documents_created",
     )
     external_uuid = models.UUIDField(null=True, blank=True, db_index=True)
     original_filename = models.CharField(max_length=255)
@@ -68,6 +85,7 @@ class Document(BaseModel):
         ]
         indexes = [
             models.Index(fields=["tenant", "status"]),
+            models.Index(fields=["tenant", "created_via"]),
         ]
 
     def __str__(self) -> str:
@@ -86,6 +104,18 @@ class IngestionJob(BaseModel):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="jobs")
     created_by_key = models.ForeignKey(
         APIKey, on_delete=models.PROTECT, related_name="jobs_created"
+    )
+    created_via = models.CharField(
+        max_length=20,
+        choices=CreationSource.choices,
+        default=CreationSource.API,
+    )
+    created_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dashboard_jobs_created",
     )
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="jobs")
     external_uuid = models.UUIDField(null=True, blank=True, db_index=True)
@@ -126,11 +156,21 @@ class IngestionJob(BaseModel):
 
     worker_hostname = models.CharField(max_length=255, blank=True)
     celery_task_id = models.CharField(max_length=255, blank=True)
+    dashboard_last_action_at = models.DateTimeField(null=True, blank=True)
+    dashboard_last_action_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dashboard_jobs_touched",
+    )
 
     class Meta:
         indexes = [
             models.Index(fields=["tenant", "status"]),
             models.Index(fields=["tenant", "stage"]),
+            models.Index(fields=["tenant", "created_via"]),
+            models.Index(fields=["tenant", "dashboard_last_action_at"]),
             models.Index(fields=["document"]),
             models.Index(fields=["comparison_id"]),
         ]

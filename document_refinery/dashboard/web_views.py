@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import time
+from datetime import timedelta
 
 from celery import current_app
 import json
@@ -11,7 +12,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.core.serializers.json import DjangoJSONEncoder
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.db.utils import OperationalError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -24,6 +25,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from authn.models import APIKey, Tenant
 from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
 from authn.options import validate_docling_options
+from .models import DashboardActionAudit
 from .runtime import runtime_diagnostics_payload, run_runtime_smoke
 from documents.docling_options import (
     capabilities_payload,
@@ -32,6 +34,7 @@ from documents.docling_options import (
 )
 from documents.models import (
     Artifact,
+    CreationSource,
     Document,
     IngestionJob,
     IngestionJobStatus,
@@ -108,7 +111,13 @@ class DashboardJobsPageView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         queryset = (
-            IngestionJob.objects.select_related("tenant", "document", "created_by_key")
+            IngestionJob.objects.select_related(
+                "tenant",
+                "document",
+                "created_by_key",
+                "created_by_user",
+                "dashboard_last_action_by",
+            )
             .order_by("-created_at", "-id")
         )
         status_filter = (self.request.GET.get("status") or "").strip()
@@ -151,7 +160,13 @@ class DashboardJobDetailPageView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         job = get_object_or_404(
-            IngestionJob.objects.select_related("tenant", "document", "created_by_key"),
+            IngestionJob.objects.select_related(
+                "tenant",
+                "document",
+                "created_by_key",
+                "created_by_user",
+                "dashboard_last_action_by",
+            ),
             pk=kwargs["pk"],
         )
         artifacts = Artifact.objects.filter(job=job).order_by("kind", "id")
@@ -582,13 +597,27 @@ def _active_dashboard_keys():
 def _default_dashboard_key():
     return (
         _active_dashboard_keys()
-        .order_by("-is_dashboard_test_key", "-last_used_at", "-created_at", "-id")
+        .order_by("-is_dashboard_test_key", "tenant__name", "name", "-created_at", "-id")
         .first()
     )
 
 
-def _api_key_payload(key: APIKey) -> dict[str, object]:
+def _dashboard_billable_summary(key: APIKey) -> dict[str, object]:
+    since = timezone.now() - timedelta(days=30)
+    summary = DashboardActionAudit.objects.filter(
+        tenant=key.tenant,
+        potentially_billable=True,
+        created_at__gte=since,
+    ).aggregate(count=Count("id"), last=Max("created_at"))
+    last = summary.get("last")
     return {
+        "dashboard_billable_actions_30d": summary.get("count") or 0,
+        "dashboard_billable_last_at": last.isoformat() if last else None,
+    }
+
+
+def _api_key_payload(key: APIKey) -> dict[str, object]:
+    payload = {
         "id": key.id,
         "name": key.name,
         "tenant_id": key.tenant_id,
@@ -600,6 +629,69 @@ def _api_key_payload(key: APIKey) -> dict[str, object]:
         "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
         "created_at": key.created_at.isoformat() if key.created_at else None,
     }
+    payload.update(_dashboard_billable_summary(key))
+    return payload
+
+
+def _request_meta_payload(request) -> dict[str, str]:
+    return {
+        "method": request.method,
+        "path": request.path,
+        "request_id": getattr(request, "request_id", "") or "",
+        "remote_addr": request.META.get("REMOTE_ADDR", ""),
+        "user_agent": (request.META.get("HTTP_USER_AGENT", "") or "")[:500],
+    }
+
+
+def _dashboard_actor(request):
+    user = getattr(request, "user", None)
+    return user if getattr(user, "is_authenticated", False) else None
+
+
+def _log_dashboard_action(
+    request,
+    api_key: APIKey,
+    action: str,
+    *,
+    potentially_billable: bool = False,
+    document: Document | None = None,
+    job: IngestionJob | None = None,
+    artifact: Artifact | None = None,
+    details: dict | None = None,
+) -> DashboardActionAudit:
+    return DashboardActionAudit.objects.create(
+        tenant=api_key.tenant,
+        api_key=api_key,
+        created_by_user=_dashboard_actor(request),
+        document=document,
+        job=job,
+        artifact=artifact,
+        action=action,
+        potentially_billable=potentially_billable,
+        tenant_name=api_key.tenant.name,
+        api_key_name=api_key.name,
+        api_key_prefix=api_key.prefix,
+        request_meta_json=_request_meta_payload(request),
+        details_json=details or {},
+    )
+
+
+def _document_from_payload(api_key: APIKey, payload: dict | None) -> Document | None:
+    payload = payload or {}
+    document_payload = payload.get("document") if isinstance(payload.get("document"), dict) else {}
+    document_id = document_payload.get("id") or payload.get("document_id") or payload.get("id")
+    if not document_id:
+        return None
+    return Document.objects.filter(tenant=api_key.tenant, pk=document_id).first()
+
+
+def _job_from_payload(api_key: APIKey, payload: dict | None) -> IngestionJob | None:
+    payload = payload or {}
+    job_payload = payload.get("job") if isinstance(payload.get("job"), dict) else {}
+    job_id = job_payload.get("id") or payload.get("job_id")
+    if not job_id:
+        return None
+    return IngestionJob.objects.filter(tenant=api_key.tenant, pk=job_id).first()
 
 
 def _selected_dashboard_key(request, payload: dict | None = None, required_scopes=()):
@@ -622,8 +714,6 @@ def _selected_dashboard_key(request, payload: dict | None = None, required_scope
     scope_set = set(key.scopes or [])
     if any(scope not in scope_set for scope in required_scopes):
         return None, _scope_error_response()
-    key.last_used_at = timezone.now()
-    key.save(update_fields=["last_used_at"])
     return key, None
 
 
@@ -679,9 +769,50 @@ def dashboard_api_documents(request):
     if request.FILES.get("file"):
         data["file"] = request.FILES["file"]
     try:
-        response = create_document_for_api_key(key, data, request)
+        response = create_document_for_api_key(
+            key,
+            data,
+            request,
+            created_via=CreationSource.DASHBOARD,
+            created_by_user=_dashboard_actor(request),
+        )
     except DRFValidationError as exc:
         return _validation_error_response(exc)
+    if response.status_code in (200, 201):
+        payload = _json_ready(response.data or {})
+        document = _document_from_payload(key, payload)
+        job = _job_from_payload(key, payload)
+        duplicate = bool(payload.get("duplicate"))
+        _log_dashboard_action(
+            request,
+            key,
+            DashboardActionAudit.Action.DOCUMENT_DUPLICATE_REUSE
+            if duplicate
+            else DashboardActionAudit.Action.DOCUMENT_UPLOAD,
+            document=document,
+            job=job,
+            details={
+                "duplicate": duplicate,
+                "status_code": response.status_code,
+                "document_id": document.id if document else None,
+                "job_id": job.id if job else None,
+            },
+        )
+        if job:
+            _log_dashboard_action(
+                request,
+                key,
+                DashboardActionAudit.Action.DOCUMENT_INGEST,
+                potentially_billable=True,
+                document=document,
+                job=job,
+                details={
+                    "source": "upload_with_ingest",
+                    "status_code": response.status_code,
+                    "document_id": document.id if document else None,
+                    "job_id": job.id,
+                },
+            )
     return _drf_to_json_response(response)
 
 
@@ -712,9 +843,40 @@ def dashboard_api_document_ingest(request, document_uuid):
         return error
     payload.pop("api_key_id", None)
     try:
-        response = ingest_document_for_api_key(key, document_uuid, payload)
+        response = ingest_document_for_api_key(
+            key,
+            document_uuid,
+            payload,
+            created_via=CreationSource.DASHBOARD,
+            created_by_user=_dashboard_actor(request),
+        )
     except DRFValidationError as exc:
         return _validation_error_response(exc)
+    if response.status_code in (200, 201):
+        response_payload = _json_ready(response.data or {})
+        document = _document_from_payload(key, response_payload)
+        job = _job_from_payload(key, response_payload)
+        potentially_billable = bool(
+            response_payload.get("created") or response_payload.get("retried")
+        )
+        _log_dashboard_action(
+            request,
+            key,
+            DashboardActionAudit.Action.DOCUMENT_INGEST,
+            potentially_billable=potentially_billable,
+            document=document,
+            job=job,
+            details={
+                "mode": response_payload.get("mode"),
+                "created": bool(response_payload.get("created")),
+                "reused": bool(response_payload.get("reused")),
+                "retried": bool(response_payload.get("retried")),
+                "status_code": response.status_code,
+                "document_uuid": str(document_uuid),
+                "document_id": document.id if document else None,
+                "job_id": job.id if job else None,
+            },
+        )
     return _drf_to_json_response(response)
 
 
@@ -725,7 +887,25 @@ def dashboard_api_job_retry(request, pk: int):
     key, error = _selected_dashboard_key(request, payload, required_scopes=("jobs:write",))
     if error:
         return error
-    response = retry_job_for_api_key(key, pk)
+    response = retry_job_for_api_key(key, pk, dashboard_action_user=_dashboard_actor(request))
+    if response.status_code == 200:
+        payload = _json_ready(response.data or {})
+        job = _job_from_payload(key, payload) or IngestionJob.objects.filter(
+            tenant=key.tenant, pk=pk
+        ).first()
+        _log_dashboard_action(
+            request,
+            key,
+            DashboardActionAudit.Action.JOB_RETRY,
+            potentially_billable=True,
+            document=job.document if job else None,
+            job=job,
+            details={
+                "status_code": response.status_code,
+                "job_id": job.id if job else pk,
+                "attempt": job.attempt if job else payload.get("attempt"),
+            },
+        )
     return _drf_to_json_response(response)
 
 
@@ -735,6 +915,23 @@ def dashboard_api_artifact_preview(request, pk: int):
     if error:
         return error
     response = preview_artifact_for_api_key(key, pk)
+    if response.status_code == 200:
+        artifact = Artifact.objects.filter(tenant=key.tenant, pk=pk).select_related(
+            "job", "job__document"
+        ).first()
+        _log_dashboard_action(
+            request,
+            key,
+            DashboardActionAudit.Action.ARTIFACT_PREVIEW,
+            artifact=artifact,
+            document=artifact.job.document if artifact else None,
+            job=artifact.job if artifact else None,
+            details={
+                "status_code": response.status_code,
+                "artifact_id": pk,
+                "artifact_kind": artifact.kind if artifact else None,
+            },
+        )
     return _drf_to_json_response(response)
 
 
@@ -747,9 +944,43 @@ def dashboard_api_compare(request, pk: int):
         return error
     payload.pop("api_key_id", None)
     try:
-        response = compare_document_for_api_key(key, pk, payload)
+        response = compare_document_for_api_key(
+            key,
+            pk,
+            payload,
+            created_via=CreationSource.DASHBOARD,
+            created_by_user=_dashboard_actor(request),
+        )
     except DRFValidationError as exc:
         return _validation_error_response(exc)
+    if response.status_code in (201, 202):
+        response_payload = _json_ready(response.data or {})
+        document = Document.objects.filter(tenant=key.tenant, pk=pk).first()
+        job_ids = [
+            item.get("job_id")
+            for item in response_payload.get("jobs", [])
+            if isinstance(item, dict) and item.get("job_id")
+        ]
+        first_job = IngestionJob.objects.filter(tenant=key.tenant, pk__in=job_ids).first()
+        _log_dashboard_action(
+            request,
+            key,
+            DashboardActionAudit.Action.DOCUMENT_COMPARE,
+            potentially_billable=bool(job_ids),
+            document=document,
+            job=first_job,
+            details={
+                "status_code": response.status_code,
+                "document_id": pk,
+                "comparison_id": response_payload.get("comparison_id"),
+                "job_ids": job_ids,
+                "profiles": [
+                    item.get("profile")
+                    for item in response_payload.get("jobs", [])
+                    if isinstance(item, dict)
+                ],
+            },
+        )
     return _drf_to_json_response(response)
 
 

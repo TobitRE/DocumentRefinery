@@ -1,7 +1,7 @@
 <section class="dr-auth-panel dr-sticky-auth dr-dashboard-context" data-dashboard-context>
   <div class="dr-context-grid">
     <div class="field">
-      <label for="dashboardApiKeySelect">Dashboard test key</label>
+      <label for="dashboardApiKeySelect">Tenant context key</label>
       <select id="dashboardApiKeySelect" data-dashboard-key-select>
         <option value="">Loading keys...</option>
       </select>
@@ -12,12 +12,13 @@
     </div>
     <div class="dr-context-status">
       <span class="muted" data-dashboard-context-status>Loading dashboard key context.</span>
+      <div class="muted" data-dashboard-billing-status></div>
       <div class="dr-feature-list" data-dashboard-context-scopes></div>
     </div>
   </div>
 
   <details class="dr-manual-key">
-    <summary>Manual public API key override</summary>
+    <summary>Manual public API key (optional)</summary>
     <div class="dr-toolbar" data-api-key-panel>
       <div class="field" style="min-width: min(28rem, 100%);">
         <label for="apiKeyInput">Raw API key</label>

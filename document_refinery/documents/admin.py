@@ -12,9 +12,19 @@ from .models import (
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ("id", "tenant", "original_filename", "status", "size_bytes", "created_at")
-    list_filter = ("tenant", "status")
+    list_display = (
+        "id",
+        "tenant",
+        "original_filename",
+        "status",
+        "created_via",
+        "created_by_user",
+        "size_bytes",
+        "created_at",
+    )
+    list_filter = ("tenant", "status", "created_via")
     search_fields = ("original_filename", "sha256")
+    readonly_fields = ("created_via", "created_by_user")
 
 
 @admin.register(IngestionJob)
@@ -26,12 +36,20 @@ class IngestionJobAdmin(admin.ModelAdmin):
         "profile",
         "status",
         "stage",
+        "created_via",
+        "created_by_user",
         "duration_ms",
+        "dashboard_last_action_at",
+        "dashboard_last_action_by",
         "started_at",
         "finished_at",
     )
-    list_filter = ("tenant", "status", "stage")
+    list_filter = ("tenant", "status", "stage", "created_via")
     readonly_fields = (
+        "created_via",
+        "created_by_user",
+        "dashboard_last_action_at",
+        "dashboard_last_action_by",
         "queued_at",
         "started_at",
         "finished_at",
