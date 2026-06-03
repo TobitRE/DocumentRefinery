@@ -111,7 +111,7 @@
                 <td class="mono">{{ job.duration_ms|default:"-" }} ms</td>
                 <td class="mono">{{ job.created_at|date:"Y-m-d H:i" }}</td>
                 <td>
-                  <div class="actions dr-row-actions">
+                  <div class="actions dr-row-actions" data-action-reason-group>
                     <button
                       type="button"
                       class="ghost"
@@ -119,6 +119,7 @@
                       data-ingest-mode="create_new"
                       data-ingest-profile="{{ job.profile|default:'' }}"
                       data-action-tenant-id="{{ job.tenant_id }}"
+                      data-action-tenant-name="{{ job.tenant.name }}"
                       data-action-scope="documents:write"
                     >Run again</button>
                     {% if job.status == "FAILED" or job.status == "QUARANTINED" %}
@@ -127,9 +128,11 @@
                         class="ghost"
                         data-job-retry="{{ job.id }}"
                         data-action-tenant-id="{{ job.tenant_id }}"
+                        data-action-tenant-name="{{ job.tenant.name }}"
                         data-action-scope="jobs:write"
                       >Retry</button>
                     {% endif %}
+                    <span class="muted dr-action-disabled-reason dr-hidden" data-action-disabled-reason></span>
                   </div>
                 </td>
               </tr>

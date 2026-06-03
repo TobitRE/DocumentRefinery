@@ -68,7 +68,7 @@
             <div class="muted">Create a new job from document #{{ job.document_id }} or retry this failed job when possible.</div>
             <div class="status status-warn" style="margin-top: .5rem;">These actions can start new Docling work for the selected tenant context.</div>
           </div>
-          <div class="actions">
+          <div class="actions" data-action-reason-group>
             <button
               type="button"
               data-document-ingest-uuid="{{ job.document.uuid }}"
@@ -76,6 +76,7 @@
               data-ingest-profile-source="#jobRunProfile"
               data-ingest-options-source="#jobRunOptionsJson"
               data-action-tenant-id="{{ job.tenant_id }}"
+              data-action-tenant-name="{{ job.tenant.name }}"
               data-action-scope="documents:write"
             >Run again</button>
             {% if job.status == "FAILED" or job.status == "QUARANTINED" %}
@@ -84,9 +85,11 @@
                 class="ghost"
                 data-job-retry="{{ job.id }}"
                 data-action-tenant-id="{{ job.tenant_id }}"
+                data-action-tenant-name="{{ job.tenant.name }}"
                 data-action-scope="jobs:write"
               >Retry job</button>
             {% endif %}
+            <span class="muted dr-action-disabled-reason dr-hidden" data-action-disabled-reason></span>
           </div>
         </div>
         <div class="form-grid">

@@ -200,18 +200,52 @@
   }
 
   function syncTenantActionAvailability(selectedKey) {
+    const actionGroups = new Map();
     qsa("[data-action-tenant-id]").forEach((btn) => {
       const requiredTenantId = btn.dataset.actionTenantId;
+      const requiredTenantName = btn.dataset.actionTenantName || `tenant #${requiredTenantId}`;
       const requiredScope = btn.dataset.actionScope;
-      const tenantMismatch = requiredTenantId && String(requiredTenantId) !== String(selectedKey?.tenant_id || "");
+      const selectedTenantId = String(selectedKey?.tenant_id || "");
+      const noContext = !selectedTenantId;
+      const tenantMismatch = requiredTenantId && String(requiredTenantId) !== selectedTenantId;
       const missingScope = requiredScope && !(selectedKey?.scopes || []).includes(requiredScope);
-      btn.disabled = Boolean(tenantMismatch || missingScope);
-      if (tenantMismatch) {
-        btn.title = "Select a tenant context key for this tenant to enable this action.";
+      let reason = "";
+      if (noContext) {
+        reason = "Select a tenant context key to enable this action.";
+      } else if (tenantMismatch) {
+        reason = `Select tenant context ${requiredTenantName} to enable this action.`;
       } else if (missingScope) {
-        btn.title = `Selected key needs ${requiredScope}.`;
+        reason = `Selected key needs ${requiredScope}.`;
+      }
+
+      btn.disabled = Boolean(reason);
+      if (reason) {
+        btn.title = reason;
+        btn.dataset.actionDisabledReason = reason;
       } else {
         btn.removeAttribute("title");
+        delete btn.dataset.actionDisabledReason;
+      }
+
+      const group = btn.closest("[data-action-reason-group]");
+      if (group) {
+        const buttons = actionGroups.get(group) || [];
+        buttons.push(btn);
+        actionGroups.set(group, buttons);
+      }
+    });
+
+    actionGroups.forEach((buttons, group) => {
+      const reasonTarget = qs("[data-action-disabled-reason]", group);
+      if (!reasonTarget) return;
+      const reasons = Array.from(
+        new Set(buttons.map((btn) => btn.dataset.actionDisabledReason).filter(Boolean))
+      );
+      reasonTarget.textContent = reasons[0] || "";
+      if (reasons.length) {
+        reasonTarget.classList.remove("dr-hidden");
+      } else {
+        reasonTarget.classList.add("dr-hidden");
       }
     });
   }

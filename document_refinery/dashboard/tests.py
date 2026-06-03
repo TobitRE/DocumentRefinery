@@ -278,6 +278,9 @@ class TestDashboardWebViews(TestCase):
             content = response.content.decode("utf-8")
             self.assertIn("tabler.min.css", content)
             self.assertIn(text, content)
+            if path == "/dashboard/jobs/" or path == f"/dashboard/jobs/{job.id}/":
+                self.assertIn("data-action-disabled-reason", content)
+                self.assertIn("data-action-tenant-name", content)
 
         response = self.client.get("/dashboard/profiles/")
         content = response.content.decode("utf-8")
