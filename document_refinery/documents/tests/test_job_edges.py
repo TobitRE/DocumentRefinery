@@ -267,6 +267,33 @@ class TestJobRetryArtifacts(TestCase):
             response = self.client.post(f"/v1/jobs/{job.id}/retry/")
         self.assertEqual(response.status_code, 403)
 
+    def test_retry_rejects_disabled_ocr_engine_snapshot(self):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256="8" * 64,
+            mime_type="application/pdf",
+            size_bytes=10,
+            storage_relpath_quarantine="uploads/quarantine/8/8.pdf",
+        )
+        job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=doc,
+            status=IngestionJobStatus.FAILED,
+            stage=IngestionStage.CONVERTING,
+            options_json={"ocr_options": {"kind": "tesseract"}},
+        )
+
+        with patch("documents.views.start_ingestion_pipeline") as queue_mock:
+            response = self.client.post(f"/v1/jobs/{job.id}/retry/")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error_code"], "INVALID_OPTIONS")
+        self.assertIn("not enabled", response.data["message"])
+        queue_mock.assert_not_called()
+
     def test_retry_queue_failure_restores_job_state(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = Document.objects.create(

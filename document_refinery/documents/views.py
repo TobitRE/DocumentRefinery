@@ -159,6 +159,14 @@ def _build_ingestion_options(api_key, options_json, profile: str | None) -> dict
     return resolved["effective_options"] or {}
 
 
+def _invalid_options_response(exc: ValidationError) -> Response:
+    message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+    return Response(
+        {"error_code": "INVALID_OPTIONS", "message": message},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 def _resolve_document_source_abs(document: Document) -> str:
     clean_path = document.get_clean_path()
     if clean_path and os.path.exists(clean_path):
@@ -753,6 +761,10 @@ def retry_job_for_api_key(api_key, job_id, *, dashboard_action_user=None) -> Res
     job = IngestionJob.objects.filter(tenant=api_key.tenant, pk=job_id).first()
     if not job:
         return Response(status=status.HTTP_404_NOT_FOUND)
+    try:
+        validate_docling_options(job.options_json or {})
+    except ValidationError as exc:
+        return _invalid_options_response(exc)
     if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
         return _retry_job(job, dashboard_action_user=dashboard_action_user)
     if job.attempt >= job.max_retries:

@@ -120,6 +120,21 @@ class TestPipelineTasks(TestCase):
             self.assertEqual(job.status, IngestionJobStatus.FAILED)
             self.assertEqual(job.error_code, "CLAMAV_INVALID_RESPONSE")
 
+    def test_convert_rejects_disabled_ocr_engine_before_docling(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            _doc, job = self._make_doc_job(tmpdir)
+            job.options_json = {"ocr_options": {"kind": "tesseract"}}
+            job.save(update_fields=["options_json"])
+
+            with patch("documents.tasks._load_docling_converter") as load_mock:
+                docling_convert_task(job.id)
+
+            load_mock.assert_not_called()
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.FAILED)
+            self.assertEqual(job.error_code, "INVALID_OPTIONS")
+            self.assertIn("not enabled", job.error_message)
+
     def test_convert_and_export_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)

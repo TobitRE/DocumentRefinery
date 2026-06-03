@@ -18,6 +18,7 @@ from pathlib import Path
 
 from celery import chain, shared_task
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from clamav_client import clamd
@@ -35,7 +36,7 @@ from .models import (
     WebhookDeliveryStatus,
     WebhookEndpoint,
 )
-from .docling_options import build_pdf_pipeline_options
+from .docling_options import build_pdf_pipeline_options, validate_docling_options_payload
 from .profiles import build_profile_pipeline_options
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
@@ -218,6 +219,10 @@ def _mark_failed(job: IngestionJob, code: str, message: str, details: dict | Non
     job.recompute_durations()
     job.save()
     queue_job_webhooks(job, prev_status, prev_stage)
+
+
+def _validation_message(exc: ValidationError) -> str:
+    return "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
 
 
 def _traceback_details(limit: int = 20000) -> dict:
@@ -409,6 +414,17 @@ def docling_convert_task(self, job_id: int) -> int:
         max_file_size_option,
         settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024,
     )
+
+    try:
+        validate_docling_options_payload(job.options_json or {})
+    except ValidationError as exc:
+        _mark_failed(
+            job,
+            "INVALID_OPTIONS",
+            _validation_message(exc),
+            {"options_json": job.options_json or {}},
+        )
+        return job_id
 
     try:
         document_converter, pdf_format_option, input_format = _load_docling_converter()
