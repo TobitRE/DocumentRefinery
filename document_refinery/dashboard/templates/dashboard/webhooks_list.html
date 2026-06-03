@@ -28,7 +28,7 @@
 
   <section class="card">
     <div class="dr-table-wrap">
-      <table class="table">
+      <table class="table dr-data-table dr-webhooks-table">
         <thead>
           <tr>
             <th>Name</th>
@@ -46,7 +46,13 @@
               <td><a href="/dashboard/webhooks/{{ endpoint.id }}/">{{ endpoint.name }}</a></td>
               <td>{{ endpoint.tenant.name }}</td>
               <td class="mono">{{ endpoint.url }}</td>
-              <td>{{ endpoint.enabled|yesno:"Enabled,Disabled" }}</td>
+              <td>
+                {% if endpoint.enabled %}
+                  <span class="status status-ok">Enabled</span>
+                {% else %}
+                  <span class="status status-neutral">Disabled</span>
+                {% endif %}
+              </td>
               <td class="mono">
                 {{ endpoint.delivery_total }} total · {{ endpoint.delivery_failed }} failed · {{ endpoint.delivery_retrying }} retrying
               </td>

@@ -63,7 +63,7 @@
   <section class="card" style="margin-top: 1rem;">
     <div class="card-body">
       <div class="dr-table-wrap">
-        <table class="table table-vcenter">
+        <table class="table table-vcenter dr-data-table dr-jobs-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -76,7 +76,7 @@
               <th>Comparison</th>
               <th>Duration</th>
               <th>Created</th>
-              <th></th>
+              <th class="dr-table-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -105,9 +105,9 @@
                 <td>{{ job.tenant.name }}</td>
                 <td>
                   <span class="mono">#{{ job.document_id }}</span><br />
-                  <span class="muted">{{ job.document.original_filename }}</span>
+                  <span class="muted dr-table-filename" title="{{ job.document.original_filename }}">{{ job.document.original_filename }}</span>
                 </td>
-                <td class="mono">{{ job.comparison_id|default:"-" }}</td>
+                <td class="mono" title="{{ job.comparison_id|default:"-" }}">{{ job.comparison_id|default:"-" }}</td>
                 <td class="mono">{{ job.duration_ms|default:"-" }} ms</td>
                 <td class="mono">{{ job.created_at|date:"Y-m-d H:i" }}</td>
                 <td>

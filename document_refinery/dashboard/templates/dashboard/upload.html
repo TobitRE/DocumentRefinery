@@ -19,7 +19,7 @@
   <div data-upload-page>
     {% include "dashboard/_dashboard_api_context.html" %}
 
-    <div class="dr-grid-wide" style="margin-top: 1rem;">
+    <div class="dr-grid-wide dr-workflow-grid" style="margin-top: 1rem;">
       <section class="card">
         <div class="card-body">
           <h2 class="card-title">Upload or run PDF documents</h2>
@@ -50,7 +50,7 @@
               <span class="status status-warn">Starting ingestion can create tenant-billed Docling work.</span>
             </div>
             {% include "dashboard/_docling_options_controls.html" with json_target="uploadOptionsJson" profiles=profiles %}
-            <details class="collapse" open>
+            <details open>
               <summary>
                 <span class="pill">JSON fallback</span>
                 <span class="muted">Unknown compatible keys stay in this payload.</span>
@@ -62,7 +62,6 @@
               <button type="button" class="ghost" data-upload-clear>Clear</button>
               <span class="muted" data-upload-status>No upload yet.</span>
             </div>
-            <pre class="metrics" data-upload-result>No upload yet.</pre>
           </div>
 
           <section class="dr-subsection">
@@ -74,7 +73,7 @@
               <button type="button" class="ghost" data-documents-refresh>Refresh</button>
             </div>
             <div class="dr-table-wrap">
-              <table class="table table-vcenter">
+              <table class="table table-vcenter dr-data-table dr-documents-table">
                 <thead>
                   <tr>
                     <th>Document</th>
@@ -93,6 +92,14 @@
               </table>
             </div>
           </section>
+
+          <details class="dr-result-details">
+            <summary>
+              <span class="pill">Upload response</span>
+              <span class="muted">Open only when you need raw API details.</span>
+            </summary>
+            <pre class="metrics" data-upload-result>No upload yet.</pre>
+          </details>
         </div>
       </section>
 

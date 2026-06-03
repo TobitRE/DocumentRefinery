@@ -28,6 +28,16 @@
     if (node) node.textContent = text;
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;",
+    }[char]));
+  }
+
   function statusClass(value) {
     const normalized = String(value || "").toLowerCase();
     if (["ok", "success", "succeeded", "delivered", "clean"].includes(normalized)) return "status status-ok";
@@ -202,6 +212,10 @@
   function syncTenantActionAvailability(selectedKey) {
     const actionGroups = new Map();
     qsa("[data-action-tenant-id]").forEach((btn) => {
+      if (!btn.dataset.actionOriginalLabel) {
+        btn.dataset.actionOriginalLabel = btn.textContent.trim();
+      }
+      btn.textContent = btn.dataset.actionOriginalLabel;
       const requiredTenantId = btn.dataset.actionTenantId;
       const requiredTenantName = btn.dataset.actionTenantName || `tenant #${requiredTenantId}`;
       const requiredScope = btn.dataset.actionScope;
@@ -210,21 +224,29 @@
       const tenantMismatch = requiredTenantId && String(requiredTenantId) !== selectedTenantId;
       const missingScope = requiredScope && !(selectedKey?.scopes || []).includes(requiredScope);
       let reason = "";
+      let shortReason = "";
       if (noContext) {
         reason = "Select a tenant context key to enable this action.";
+        shortReason = "Select tenant context.";
       } else if (tenantMismatch) {
         reason = `Select tenant context ${requiredTenantName} to enable this action.`;
+        shortReason = `Use ${requiredTenantName} context.`;
       } else if (missingScope) {
         reason = `Selected key needs ${requiredScope}.`;
+        shortReason = `Needs ${requiredScope}.`;
       }
 
       btn.disabled = Boolean(reason);
       if (reason) {
         btn.title = reason;
-        btn.dataset.actionDisabledReason = reason;
+        delete btn.dataset.actionDisabledReason;
+        btn.dataset.actionDisabledReasonFull = reason;
+        btn.dataset.actionDisabledReasonShort = shortReason;
       } else {
         btn.removeAttribute("title");
         delete btn.dataset.actionDisabledReason;
+        delete btn.dataset.actionDisabledReasonFull;
+        delete btn.dataset.actionDisabledReasonShort;
       }
 
       const group = btn.closest("[data-action-reason-group]");
@@ -236,10 +258,10 @@
     });
 
     actionGroups.forEach((buttons, group) => {
-      const reasonTarget = qs("[data-action-disabled-reason]", group);
+      const reasonTarget = qs(".dr-action-disabled-reason[data-action-disabled-reason]", group);
       if (!reasonTarget) return;
       const reasons = Array.from(
-        new Set(buttons.map((btn) => btn.dataset.actionDisabledReason).filter(Boolean))
+        new Set(buttons.map((btn) => btn.dataset.actionDisabledReasonShort).filter(Boolean))
       );
       reasonTarget.textContent = reasons[0] || "";
       if (reasons.length) {
@@ -683,20 +705,28 @@
     documents.forEach((item) => {
       const row = document.createElement("tr");
       const latest = item.latest_job;
+      const documentId = escapeHtml(item.id);
+      const filename = escapeHtml(item.original_filename || "-");
+      const uuid = escapeHtml(item.uuid);
+      const status = escapeHtml(item.status);
+      const origin = item.created_via === "DASHBOARD" ? "Dashboard" : "API";
+      const latestHtml = latest
+        ? `<a href="/dashboard/jobs/${encodeURIComponent(latest.id)}/">#${escapeHtml(latest.id)}</a> <span class="${statusClass(latest.status)}">${escapeHtml(latest.status)}</span>`
+        : '<span class="muted">-</span>';
       row.innerHTML = `
         <td>
-          <span class="mono">#${item.id}</span><br />
-          <span>${item.original_filename || "-"}</span><br />
-          <span class="muted mono">${item.uuid}</span>
+          <span class="mono">#${documentId}</span><br />
+          <span class="dr-table-filename" title="${filename}">${filename}</span>
+          <span class="muted mono dr-table-uuid" title="${uuid}">${uuid}</span>
         </td>
-        <td><span class="${statusClass(item.status)}">${item.status}</span></td>
-        <td><span class="${item.created_via === "DASHBOARD" ? "status status-warn" : "status status-neutral"}">${item.created_via === "DASHBOARD" ? "Dashboard" : "API"}</span></td>
-        <td>${latest ? `<a href="/dashboard/jobs/${latest.id}/">#${latest.id}</a> <span class="${statusClass(latest.status)}">${latest.status}</span>` : '<span class="muted">-</span>'}</td>
-        <td class="mono">${item.job_count || 0}</td>
+        <td><span class="${statusClass(item.status)}">${status}</span></td>
+        <td><span class="${item.created_via === "DASHBOARD" ? "status status-warn" : "status status-neutral"}">${origin}</span></td>
+        <td>${latestHtml}</td>
+        <td class="mono">${escapeHtml(item.job_count || 0)}</td>
         <td>
           <div class="actions dr-row-actions">
-            <button type="button" class="ghost" data-document-ingest-uuid="${item.uuid}" data-ingest-mode="create_new">Run new job</button>
-            <button type="button" class="ghost" data-document-ingest-uuid="${item.uuid}" data-ingest-mode="reuse_existing">Reuse if same</button>
+            <button type="button" class="ghost" data-document-ingest-uuid="${uuid}" data-ingest-mode="create_new">Run new job</button>
+            <button type="button" class="ghost" data-document-ingest-uuid="${uuid}" data-ingest-mode="reuse_existing">Reuse if same</button>
           </div>
         </td>
       `;

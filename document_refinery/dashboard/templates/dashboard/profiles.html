@@ -113,7 +113,7 @@
           {% for warning in profile.warnings %}
             <div class="status status-warn">{{ warning }}</div>
           {% endfor %}
-          <details class="collapse">
+          <details>
             <summary><span class="pill">Pipeline options</span></summary>
             <pre class="metrics">{{ profile.pipeline_options }}</pre>
           </details>

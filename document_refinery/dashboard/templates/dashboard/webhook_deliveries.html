@@ -59,7 +59,7 @@
 
   <section class="card">
     <div class="dr-table-wrap">
-      <table class="table">
+      <table class="table dr-data-table dr-deliveries-table">
         <thead>
           <tr>
             <th>Endpoint</th>
@@ -76,7 +76,7 @@
             <tr>
               <td><a href="/dashboard/webhooks/{{ delivery.endpoint.id }}/">{{ delivery.endpoint.name }}</a></td>
               <td><a href="/dashboard/webhook-deliveries/{{ delivery.id }}/">{{ delivery.event_type }}</a></td>
-              <td>{{ delivery.status }}</td>
+              <td><span class="status status-neutral">{{ delivery.status }}</span></td>
               <td>{{ delivery.attempt }}</td>
               <td>{{ delivery.response_code|default:"—" }}</td>
               <td class="mono">{{ delivery.next_retry_at|date:"Y-m-d H:i"|default:"—" }}</td>

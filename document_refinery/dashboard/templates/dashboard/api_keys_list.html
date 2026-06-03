@@ -28,7 +28,7 @@
 
   <section class="card">
     <div class="dr-table-wrap">
-      <table class="table">
+      <table class="table dr-data-table dr-api-keys-table">
         <thead>
           <tr>
             <th>Name</th>
@@ -47,7 +47,13 @@
               <td><a href="/dashboard/api-keys/{{ key.id }}/">{{ key.name }}</a></td>
               <td>{{ key.tenant.name }}</td>
               <td class="mono">{{ key.prefix }}</td>
-              <td class="mono">{{ key.scopes|join:", " }}</td>
+              <td>
+                <div class="dr-feature-list dr-feature-list-compact">
+                  {% for scope in key.scopes %}
+                    <span class="status status-neutral">{{ scope }}</span>
+                  {% endfor %}
+                </div>
+              </td>
               <td>
                 {% if key.is_dashboard_test_key %}
                   <span class="status status-ok">test key</span>

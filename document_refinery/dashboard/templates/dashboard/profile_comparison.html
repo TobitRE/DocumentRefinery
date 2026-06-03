@@ -19,7 +19,7 @@
   <div data-comparison-page>
     {% include "dashboard/_dashboard_api_context.html" %}
 
-    <div class="dr-grid-wide" style="margin-top: 1rem;">
+    <div class="dr-grid-wide dr-workflow-grid" style="margin-top: 1rem;">
       <section class="card">
         <div class="card-body">
           <h2 class="card-title">Queue comparison</h2>
@@ -52,7 +52,7 @@
               {% endfor %}
             </div>
             {% include "dashboard/_docling_options_controls.html" with json_target="compareOptionsJson" profiles=profiles %}
-            <details class="collapse" open>
+            <details open>
               <summary>
                 <span class="pill">JSON fallback</span>
                 <span class="muted">Applied before profile overrides.</span>

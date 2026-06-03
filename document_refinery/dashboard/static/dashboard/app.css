@@ -9,6 +9,12 @@ body {
   background: #f4f6f8;
 }
 
+@media (min-width: 1200px) {
+  .container-xl {
+    max-width: min(112rem, calc(100% - 2rem));
+  }
+}
+
 .navbar-brand {
   letter-spacing: 0;
 }
@@ -63,11 +69,25 @@ body {
   gap: 1rem;
 }
 
+.dr-workflow-grid {
+  grid-template-columns: minmax(42rem, 1.45fr) minmax(22rem, .85fr);
+}
+
 .card {
   border-color: var(--dr-border);
   border-radius: .5rem;
   box-shadow: 0 .125rem .375rem rgba(19, 33, 68, .04);
   min-width: 0;
+}
+
+section.card > .row,
+section.card > form {
+  margin: 0;
+  padding: 1rem 1.125rem;
+}
+
+section.card > .dr-table-wrap {
+  padding: 1rem 1.125rem;
 }
 
 .card h3,
@@ -353,10 +373,146 @@ body {
 
 .dr-table-wrap {
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .dr-table-wrap table {
   min-width: 48rem;
+}
+
+.dr-table-wrap .dr-data-table {
+  min-width: 72rem;
+}
+
+.dr-data-table th,
+.dr-data-table td {
+  vertical-align: middle;
+}
+
+.dr-data-table .status {
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.dr-data-table .mono {
+  overflow-wrap: anywhere;
+}
+
+.dr-table-filename,
+.dr-table-uuid {
+  display: block;
+  max-width: 18rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dr-table-uuid {
+  max-width: 20rem;
+}
+
+.dr-table-actions {
+  width: 13rem;
+}
+
+.dr-table-wrap .dr-jobs-table {
+  min-width: 96rem;
+}
+
+.dr-jobs-table th:nth-child(1),
+.dr-jobs-table td:nth-child(1) {
+  width: 4rem;
+  white-space: nowrap;
+}
+
+.dr-jobs-table th:nth-child(2),
+.dr-jobs-table td:nth-child(2) {
+  width: 6.25rem;
+}
+
+.dr-jobs-table th:nth-child(3),
+.dr-jobs-table td:nth-child(3) {
+  width: 7rem;
+}
+
+.dr-jobs-table th:nth-child(4),
+.dr-jobs-table td:nth-child(4) {
+  width: 8rem;
+  white-space: nowrap;
+}
+
+.dr-jobs-table th:nth-child(5),
+.dr-jobs-table td:nth-child(5) {
+  width: 9rem;
+}
+
+.dr-jobs-table th:nth-child(6),
+.dr-jobs-table td:nth-child(6) {
+  width: 7rem;
+  white-space: nowrap;
+}
+
+.dr-jobs-table th:nth-child(7),
+.dr-jobs-table td:nth-child(7) {
+  min-width: 13rem;
+}
+
+.dr-jobs-table th:nth-child(8),
+.dr-jobs-table td:nth-child(8) {
+  max-width: 17rem;
+  min-width: 15rem;
+  overflow-wrap: anywhere;
+}
+
+.dr-jobs-table th:nth-child(9),
+.dr-jobs-table td:nth-child(9) {
+  width: 6.5rem;
+  white-space: nowrap;
+}
+
+.dr-jobs-table th:nth-child(10),
+.dr-jobs-table td:nth-child(10) {
+  width: 9rem;
+  white-space: nowrap;
+}
+
+.dr-jobs-table th:nth-child(11),
+.dr-jobs-table td:nth-child(11) {
+  min-width: 13rem;
+}
+
+.dr-jobs-table .dr-row-actions {
+  align-items: stretch;
+  flex-direction: column;
+  gap: .375rem;
+  min-width: 11.5rem;
+}
+
+.dr-jobs-table .dr-row-actions button {
+  justify-content: center;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.dr-jobs-table .dr-action-disabled-reason {
+  max-width: 11.5rem;
+}
+
+.dr-table-wrap .dr-documents-table {
+  min-width: 78rem;
+}
+
+.dr-table-wrap .dr-api-keys-table {
+  min-width: 92rem;
+}
+
+.dr-table-wrap .dr-webhooks-table {
+  min-width: 86rem;
+}
+
+.dr-table-wrap .dr-deliveries-table {
+  min-width: 78rem;
 }
 
 .dr-json-preview {
@@ -374,6 +530,54 @@ body {
   gap: .5rem;
 }
 
+.dr-feature-list-compact {
+  gap: .375rem;
+}
+
+.dr-feature-list-compact .status {
+  min-height: 1.5rem;
+  padding: .125rem .5rem;
+}
+
+.dr-result-details {
+  border-top: 1px solid var(--dr-border);
+  margin-top: 1rem;
+  padding-top: .875rem;
+}
+
+details summary,
+.dr-result-details summary {
+  cursor: pointer;
+}
+
+.dr-result-details .metrics {
+  margin-top: .75rem;
+}
+
+.dr-kv-list {
+  display: grid;
+  gap: .5rem;
+}
+
+.dr-kv-row {
+  align-items: start;
+  display: grid;
+  gap: .75rem;
+  grid-template-columns: minmax(9rem, .45fr) minmax(0, 1fr);
+}
+
+.dr-kv-key {
+  color: var(--dr-muted);
+  font-size: .75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dr-kv-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .dr-nav-note {
   color: var(--dr-muted);
   font-size: .75rem;
@@ -389,10 +593,6 @@ body {
 
 .error {
   color: #a32020;
-}
-
-details.collapse summary {
-  cursor: pointer;
 }
 
 button.ghost,
@@ -432,7 +632,7 @@ button.ghost:disabled {
   opacity: .55;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
   .dr-grid-wide {
     grid-template-columns: 1fr;
   }
