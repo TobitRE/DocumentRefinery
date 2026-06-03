@@ -17,22 +17,12 @@
 
 {% block content %}
   <div data-upload-page>
-    <section class="dr-auth-panel dr-sticky-auth" data-api-key-panel>
-      <div class="dr-toolbar">
-        <div class="field" style="min-width: min(28rem, 100%);">
-          <label for="apiKeyInput">API key</label>
-          <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
-        </div>
-        <button id="saveKeyBtn" type="button" data-api-key-use>Use key</button>
-        <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear key</button>
-        <span class="muted" id="statusLine" data-api-key-status>Waiting for API key.</span>
-      </div>
-    </section>
+    {% include "dashboard/_dashboard_api_context.html" %}
 
     <div class="dr-grid-wide" style="margin-top: 1rem;">
       <section class="card">
         <div class="card-body">
-          <h2 class="card-title">Upload PDFs</h2>
+          <h2 class="card-title">Upload or run PDF documents</h2>
           <div class="form-grid">
             <div class="field">
               <label for="uploadFile">PDF files</label>
@@ -73,6 +63,34 @@
             </div>
             <pre class="metrics" data-upload-result>No upload yet.</pre>
           </div>
+
+          <section class="dr-subsection">
+            <div class="dr-section-heading">
+              <div>
+                <h3 class="card-title">Existing documents</h3>
+                <div class="muted">Run another job from an already uploaded document using the selected profile and options above.</div>
+              </div>
+              <button type="button" class="ghost" data-documents-refresh>Refresh</button>
+            </div>
+            <div class="dr-table-wrap">
+              <table class="table table-vcenter">
+                <thead>
+                  <tr>
+                    <th>Document</th>
+                    <th>Status</th>
+                    <th>Latest job</th>
+                    <th>Jobs</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody data-documents-table>
+                  <tr>
+                    <td colspan="5" class="text-muted">Select a dashboard key to load documents.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </section>
 

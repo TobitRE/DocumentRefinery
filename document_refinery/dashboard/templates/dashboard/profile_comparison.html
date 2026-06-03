@@ -17,17 +17,7 @@
 
 {% block content %}
   <div data-comparison-page>
-    <section class="dr-auth-panel dr-sticky-auth" data-api-key-panel>
-      <div class="dr-toolbar">
-        <div class="field" style="min-width: min(28rem, 100%);">
-          <label for="apiKeyInput">API key</label>
-          <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
-        </div>
-        <button id="saveKeyBtn" type="button" data-api-key-use>Use key</button>
-        <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear key</button>
-        <span class="muted" id="statusLine" data-api-key-status>Waiting for API key.</span>
-      </div>
-    </section>
+    {% include "dashboard/_dashboard_api_context.html" %}
 
     <div class="dr-grid-wide" style="margin-top: 1rem;">
       <section class="card">

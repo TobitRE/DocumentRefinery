@@ -1,10 +1,13 @@
 import os
 import tempfile
 import time
+import hashlib
+import json
 from datetime import timedelta
 from unittest.mock import MagicMock, patch, mock_open
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -493,6 +496,171 @@ class TestDashboardWebViews(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("Create an API key", response.content.decode("utf-8"))
+
+
+class TestDashboardStaffActions(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="staff",
+            password="password",
+            is_staff=True,
+        )
+        self.client.login(username="staff", password="password")
+        self.tenant = Tenant.objects.create(name="Acme", slug="acme")
+        raw_key, prefix, key_hash = APIKey.generate_key()
+        self.api_key = APIKey.objects.create(
+            tenant=self.tenant,
+            name="Dashboard Test",
+            prefix=prefix,
+            key_hash=key_hash,
+            scopes=[
+                "documents:read",
+                "documents:write",
+                "jobs:read",
+                "jobs:write",
+                "artifacts:read",
+                "dashboard:read",
+            ],
+            active=True,
+            is_dashboard_test_key=True,
+        )
+
+    def _make_document_with_clean_source(self, tmpdir, content=b"%PDF-1.4 clean\n"):
+        doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="sample.pdf",
+            sha256=hashlib.sha256(content).hexdigest(),
+            mime_type="application/pdf",
+            size_bytes=len(content),
+            storage_relpath_quarantine=f"uploads/quarantine/{self.tenant.id}/missing.pdf",
+        )
+        clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+        clean_abs = os.path.join(tmpdir, clean_relpath)
+        os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+        with open(clean_abs, "wb") as handle:
+            handle.write(content)
+        doc.storage_relpath_clean = clean_relpath
+        doc.save(update_fields=["storage_relpath_clean"])
+        return doc
+
+    def test_dashboard_context_prefers_test_key(self):
+        response = self.client.get("/dashboard/api/context")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["default_key_id"], self.api_key.id)
+        self.assertTrue(payload["keys"][0]["is_dashboard_test_key"])
+
+    def test_dashboard_documents_lists_selected_tenant_documents(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean_source(tmpdir)
+            response = self.client.get(f"/dashboard/api/documents/?api_key_id={self.api_key.id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["documents"][0]["id"], doc.id)
+        self.assertEqual(payload["documents"][0]["job_count"], 0)
+
+    def test_dashboard_upload_duplicate_returns_existing_document_by_default(self):
+        content = b"%PDF-1.4 duplicate\n"
+        existing_doc = Document.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            original_filename="existing.pdf",
+            sha256=hashlib.sha256(content).hexdigest(),
+            mime_type="application/pdf",
+            size_bytes=len(content),
+            storage_relpath_quarantine="uploads/quarantine/existing.pdf",
+        )
+        latest_job = IngestionJob.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            document=existing_doc,
+            status=IngestionJobStatus.SUCCEEDED,
+            stage=IngestionStage.FINALIZING,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            upload = SimpleUploadedFile("sample.pdf", content, content_type="application/pdf")
+            response = self.client.post(
+                "/dashboard/api/documents/",
+                {"api_key_id": self.api_key.id, "file": upload},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["duplicate"])
+        self.assertEqual(payload["document"]["id"], existing_doc.id)
+        self.assertEqual(payload["latest_job"]["id"], latest_job.id)
+
+    def test_dashboard_existing_document_can_create_new_job(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean_source(tmpdir)
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/dashboard/api/documents/{doc.uuid}/ingest/",
+                    data=json.dumps(
+                        {
+                            "api_key_id": self.api_key.id,
+                            "mode": "create_new",
+                            "profile": "fast_text",
+                        }
+                    ),
+                    content_type="application/json",
+                )
+
+            self.assertEqual(response.status_code, 201)
+            payload = response.json()
+            job = IngestionJob.objects.get(pk=payload["job_id"])
+            self.assertEqual(job.document_id, doc.id)
+            self.assertEqual(job.profile, "fast_text")
+            self.assertTrue(job.source_relpath)
+            start_mock.assert_called_once_with(job.id)
+
+    def test_dashboard_failed_job_can_be_retried(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean_source(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.EXPORTING,
+                attempt=1,
+                max_retries=3,
+                error_code="DOCLING_CONVERT_FAILED",
+                error_message="conversion failed",
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/dashboard/api/jobs/{job.id}/retry/",
+                    data=json.dumps({"api_key_id": self.api_key.id}),
+                    content_type="application/json",
+                )
+
+            self.assertEqual(response.status_code, 200)
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.QUEUED)
+            self.assertEqual(job.stage, IngestionStage.SCANNING)
+            self.assertEqual(job.attempt, 2)
+            start_mock.assert_called_once_with(job.id)
+
+    def test_dashboard_jobs_uses_selected_key_scope(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean_source(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.SUCCEEDED,
+                stage=IngestionStage.FINALIZING,
+            )
+            response = self.client.get(
+                f"/dashboard/api/jobs/?api_key_id={self.api_key.id}&document_id={doc.id}"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["jobs"][0]["id"], job.id)
 
 
 class TestRuntimeSmokeGuards(TestCase):

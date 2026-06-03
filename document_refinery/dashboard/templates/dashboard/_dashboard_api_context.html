@@ -1,0 +1,31 @@
+<section class="dr-auth-panel dr-sticky-auth dr-dashboard-context" data-dashboard-context>
+  <div class="dr-context-grid">
+    <div class="field">
+      <label for="dashboardApiKeySelect">Dashboard test key</label>
+      <select id="dashboardApiKeySelect" data-dashboard-key-select>
+        <option value="">Loading keys...</option>
+      </select>
+    </div>
+    <div class="dr-context-actions">
+      <a class="btn btn-outline-primary" href="/dashboard/api-keys/new/?dashboard_test=1">Create test key</a>
+      <button type="button" class="ghost" data-dashboard-context-refresh>Refresh</button>
+    </div>
+    <div class="dr-context-status">
+      <span class="muted" data-dashboard-context-status>Loading dashboard key context.</span>
+      <div class="dr-feature-list" data-dashboard-context-scopes></div>
+    </div>
+  </div>
+
+  <details class="dr-manual-key">
+    <summary>Manual public API key override</summary>
+    <div class="dr-toolbar" data-api-key-panel>
+      <div class="field" style="min-width: min(28rem, 100%);">
+        <label for="apiKeyInput">Raw API key</label>
+        <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
+      </div>
+      <button id="saveKeyBtn" type="button" data-api-key-use>Use raw key</button>
+      <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear raw key</button>
+      <span class="muted" id="statusLine" data-api-key-status>Raw key is optional.</span>
+    </div>
+  </details>
+</section>

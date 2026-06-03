@@ -108,6 +108,10 @@
           <input type="checkbox" name="active" checked />
           Active
         </label>
+        <label class="pill">
+          <input type="checkbox" name="is_dashboard_test_key" {% if is_dashboard_test_key %}checked{% endif %} />
+          Dashboard test key
+        </label>
       </div>
       <div class="actions">
         <button type="submit">Create key</button>

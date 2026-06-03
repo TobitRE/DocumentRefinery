@@ -8,29 +8,50 @@ import json
 
 from django.conf import settings
 from django.contrib.admin.views.decorators import staff_member_required
+from django.core.serializers.json import DjangoJSONEncoder
 from django.core.exceptions import ValidationError
 from django.db import connections
 from django.db.models import Count, Q
 from django.db.utils import OperationalError
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from authn.models import APIKey, Tenant
 from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
+from authn.options import validate_docling_options
 from .runtime import runtime_diagnostics_payload, run_runtime_smoke
-from documents.docling_options import capabilities_payload, profile_catalog
+from documents.docling_options import (
+    capabilities_payload,
+    profile_catalog,
+    resolve_effective_options,
+)
 from documents.models import (
     Artifact,
+    Document,
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
     WebhookDelivery,
     WebhookDeliveryStatus,
     WebhookEndpoint,
+)
+from documents.serializers import (
+    DocumentSerializer,
+    DoclingOptionsResolveSerializer,
+    JobSerializer,
+)
+from documents.views import (
+    _latest_job_summary_payload,
+    compare_document_for_api_key,
+    create_document_for_api_key,
+    ingest_document_for_api_key,
+    preview_artifact_for_api_key,
+    retry_job_for_api_key,
 )
 from documents.validators import validate_webhook_url
 
@@ -145,6 +166,7 @@ class DashboardJobDetailPageView(TemplateView):
                 "error_details_text": json.dumps(
                     job.error_details_json or {}, indent=2, sort_keys=True
                 ),
+                "profiles": profile_catalog(),
             }
         )
         return context
@@ -505,9 +527,263 @@ def runtime_smoke(request):
     return JsonResponse(payload, status=status_code)
 
 
+def _json_ready(payload):
+    return json.loads(json.dumps(payload, cls=DjangoJSONEncoder))
+
+
+def _drf_to_json_response(response):
+    if response.data is None:
+        django_response = HttpResponse(status=response.status_code)
+    else:
+        django_response = JsonResponse(
+            _json_ready(response.data),
+            status=response.status_code,
+            safe=not isinstance(response.data, list),
+        )
+    for header, value in response.items():
+        if header.lower() == "content-type":
+            continue
+        django_response[header] = value
+    return django_response
+
+
+def _request_json(request) -> dict:
+    if not request.body:
+        return {}
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _scope_error_response() -> JsonResponse:
+    return JsonResponse(
+        {"error_code": "INSUFFICIENT_SCOPE", "message": "Selected API key scope is insufficient."},
+        status=403,
+    )
+
+
+def _validation_error_response(exc: DRFValidationError) -> JsonResponse:
+    return JsonResponse(
+        {
+            "error_code": "INVALID_REQUEST",
+            "message": "Request payload is invalid.",
+            "details": _json_ready(exc.detail),
+        },
+        status=400,
+    )
+
+
+def _active_dashboard_keys():
+    return APIKey.objects.select_related("tenant").filter(active=True)
+
+
+def _default_dashboard_key():
+    return (
+        _active_dashboard_keys()
+        .order_by("-is_dashboard_test_key", "-last_used_at", "-created_at", "-id")
+        .first()
+    )
+
+
+def _api_key_payload(key: APIKey) -> dict[str, object]:
+    return {
+        "id": key.id,
+        "name": key.name,
+        "tenant_id": key.tenant_id,
+        "tenant_name": key.tenant.name,
+        "prefix": key.prefix,
+        "scopes": key.scopes or [],
+        "active": key.active,
+        "is_dashboard_test_key": key.is_dashboard_test_key,
+        "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+        "created_at": key.created_at.isoformat() if key.created_at else None,
+    }
+
+
+def _selected_dashboard_key(request, payload: dict | None = None, required_scopes=()):
+    payload = payload or {}
+    key_id = (
+        payload.get("api_key_id")
+        or request.POST.get("api_key_id")
+        or request.GET.get("api_key_id")
+    )
+    queryset = _active_dashboard_keys()
+    if key_id:
+        key = queryset.filter(pk=key_id).first()
+    else:
+        key = _default_dashboard_key()
+    if not key:
+        return None, JsonResponse(
+            {"error_code": "NO_ACTIVE_API_KEY", "message": "Create an active API key first."},
+            status=400,
+        )
+    scope_set = set(key.scopes or [])
+    if any(scope not in scope_set for scope in required_scopes):
+        return None, _scope_error_response()
+    key.last_used_at = timezone.now()
+    key.save(update_fields=["last_used_at"])
+    return key, None
+
+
+def _document_dashboard_payload(document: Document) -> dict[str, object]:
+    latest_job = (
+        IngestionJob.objects.filter(document=document)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    payload = DocumentSerializer(document).data
+    payload["latest_job"] = _latest_job_summary_payload(latest_job)
+    payload["job_count"] = IngestionJob.objects.filter(document=document).count()
+    return payload
+
+
+@staff_member_required
+def dashboard_api_context(request):
+    keys = list(_active_dashboard_keys().order_by("-is_dashboard_test_key", "tenant__name", "name"))
+    default_key = _default_dashboard_key()
+    return JsonResponse(
+        {
+            "default_key_id": default_key.id if default_key else None,
+            "keys": [_api_key_payload(key) for key in keys],
+        }
+    )
+
+
+@staff_member_required
+def dashboard_api_documents(request):
+    if request.method == "GET":
+        key, error = _selected_dashboard_key(request, required_scopes=("documents:read",))
+        if error:
+            return error
+        documents = (
+            Document.objects.filter(tenant=key.tenant)
+            .order_by("-created_at", "-id")[:50]
+        )
+        return JsonResponse(
+            {
+                "documents": [_document_dashboard_payload(document) for document in documents],
+                "api_key": _api_key_payload(key),
+            }
+        )
+
+    if request.method != "POST":
+        return JsonResponse({"error_code": "METHOD_NOT_ALLOWED"}, status=405)
+    key, error = _selected_dashboard_key(request, required_scopes=("documents:write",))
+    if error:
+        return error
+    data = request.POST.copy()
+    if not data.get("duplicate_policy"):
+        data["duplicate_policy"] = "return_existing"
+    if request.FILES.get("file"):
+        data["file"] = request.FILES["file"]
+    try:
+        response = create_document_for_api_key(key, data, request)
+    except DRFValidationError as exc:
+        return _validation_error_response(exc)
+    return _drf_to_json_response(response)
+
+
+@staff_member_required
+def dashboard_api_jobs(request):
+    key, error = _selected_dashboard_key(request, required_scopes=("jobs:read",))
+    if error:
+        return error
+    queryset = IngestionJob.objects.filter(tenant=key.tenant).order_by("-created_at", "-id")
+    comparison_id = (request.GET.get("comparison_id") or "").strip()
+    document_id = (request.GET.get("document_id") or "").strip()
+    status_filter = (request.GET.get("status") or "").strip()
+    if comparison_id:
+        queryset = queryset.filter(comparison_id=comparison_id)
+    if document_id:
+        queryset = queryset.filter(document_id=document_id)
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    return JsonResponse({"jobs": _json_ready(JobSerializer(queryset[:100], many=True).data)})
+
+
+@staff_member_required
+@require_POST
+def dashboard_api_document_ingest(request, document_uuid):
+    payload = _request_json(request)
+    key, error = _selected_dashboard_key(request, payload, required_scopes=("documents:write",))
+    if error:
+        return error
+    payload.pop("api_key_id", None)
+    try:
+        response = ingest_document_for_api_key(key, document_uuid, payload)
+    except DRFValidationError as exc:
+        return _validation_error_response(exc)
+    return _drf_to_json_response(response)
+
+
+@staff_member_required
+@require_POST
+def dashboard_api_job_retry(request, pk: int):
+    payload = _request_json(request)
+    key, error = _selected_dashboard_key(request, payload, required_scopes=("jobs:write",))
+    if error:
+        return error
+    response = retry_job_for_api_key(key, pk)
+    return _drf_to_json_response(response)
+
+
+@staff_member_required
+def dashboard_api_artifact_preview(request, pk: int):
+    key, error = _selected_dashboard_key(request, required_scopes=("artifacts:read",))
+    if error:
+        return error
+    response = preview_artifact_for_api_key(key, pk)
+    return _drf_to_json_response(response)
+
+
+@staff_member_required
+@require_POST
+def dashboard_api_compare(request, pk: int):
+    payload = _request_json(request)
+    key, error = _selected_dashboard_key(request, payload, required_scopes=("documents:write",))
+    if error:
+        return error
+    payload.pop("api_key_id", None)
+    try:
+        response = compare_document_for_api_key(key, pk, payload)
+    except DRFValidationError as exc:
+        return _validation_error_response(exc)
+    return _drf_to_json_response(response)
+
+
+@staff_member_required
+@require_POST
+def dashboard_api_options_resolve(request):
+    payload = _request_json(request)
+    key, error = _selected_dashboard_key(request, payload)
+    if error:
+        return error
+    payload.pop("api_key_id", None)
+    serializer = DoclingOptionsResolveSerializer(data=payload)
+    try:
+        serializer.is_valid(raise_exception=True)
+    except DRFValidationError as exc:
+        return _validation_error_response(exc)
+    try:
+        resolved = resolve_effective_options(
+            key,
+            serializer.validated_data.get("options_json", None),
+            serializer.validated_data.get("profile") or None,
+        )
+        validate_docling_options(resolved["effective_options"])
+    except ValidationError as exc:
+        message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+        return JsonResponse({"error_code": "INVALID_OPTIONS", "message": message}, status=400)
+    return JsonResponse(_json_ready(resolved))
+
+
 @staff_member_required
 def api_keys_list(request):
-    keys = APIKey.objects.select_related("tenant").order_by("-created_at")
+    keys = APIKey.objects.select_related("tenant").order_by(
+        "-is_dashboard_test_key", "-created_at"
+    )
     return render(
         request,
         "dashboard/api_keys_list.html",
@@ -521,7 +797,17 @@ def api_key_new(request):
     raw_key = None
     errors = None
     selected_scopes: list[str] = []
+    is_dashboard_test_key = request.GET.get("dashboard_test") in {"1", "true", "yes"}
     allowed_upload_mime_types_text = _default_allowed_upload_mime_types_text()
+    if is_dashboard_test_key:
+        selected_scopes = [
+            "documents:read",
+            "documents:write",
+            "artifacts:read",
+            "jobs:read",
+            "jobs:write",
+            "dashboard:read",
+        ]
 
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
@@ -530,6 +816,7 @@ def api_key_new(request):
             request.POST.get("scopes", "")
         )
         active = request.POST.get("active") == "on"
+        is_dashboard_test_key = request.POST.get("is_dashboard_test_key") == "on"
         options_raw = request.POST.get("docling_options_json", "")
         allowed_upload_mime_types_text = (request.POST.get("allowed_upload_mime_types") or "").strip()
         allowed_upload_mime_types = _parse_list(allowed_upload_mime_types_text)
@@ -548,6 +835,7 @@ def api_key_new(request):
                     key_hash=key_hash,
                     scopes=selected_scopes,
                     active=active,
+                    is_dashboard_test_key=is_dashboard_test_key,
                     docling_options_json=docling_options,
                     allowed_upload_mime_types=allowed_upload_mime_types,
                 )
@@ -566,6 +854,7 @@ def api_key_new(request):
             "nav_active": "keys",
             "scope_options": _scope_options(selected_scopes),
             "selected_scopes": selected_scopes,
+            "is_dashboard_test_key": is_dashboard_test_key,
             "allowed_upload_mime_types_text": allowed_upload_mime_types_text,
             "profiles": profile_catalog(),
         },
@@ -601,6 +890,7 @@ def api_key_detail(request, pk: int):
                 request.POST.get("scopes", "")
             )
             active = request.POST.get("active") == "on"
+            is_dashboard_test_key = request.POST.get("is_dashboard_test_key") == "on"
             options_raw = request.POST.get("docling_options_json", "")
             allowed_upload_mime_types_text = (
                 request.POST.get("allowed_upload_mime_types") or ""
@@ -610,6 +900,7 @@ def api_key_detail(request, pk: int):
                 key.name = name or key.name
                 key.scopes = selected_scopes
                 key.active = active
+                key.is_dashboard_test_key = is_dashboard_test_key
                 key.docling_options_json = _parse_json(options_raw)
                 key.allowed_upload_mime_types = allowed_upload_mime_types
                 key.save()

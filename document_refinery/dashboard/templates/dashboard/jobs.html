@@ -14,6 +14,8 @@
 {% endblock %}
 
 {% block content %}
+  {% include "dashboard/_dashboard_api_context.html" %}
+
   <section class="card">
     <div class="card-body">
       <form method="get" class="dr-toolbar">
@@ -68,10 +70,12 @@
               <th>Status</th>
               <th>Stage</th>
               <th>Profile</th>
+              <th>Tenant</th>
               <th>Document</th>
               <th>Comparison</th>
               <th>Duration</th>
               <th>Created</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -81,6 +85,7 @@
                 <td><span class="status status-neutral">{{ job.status }}</span></td>
                 <td><span class="status status-neutral">{{ job.stage }}</span></td>
                 <td><span class="mono">{{ job.profile|default:"-" }}</span></td>
+                <td>{{ job.tenant.name }}</td>
                 <td>
                   <span class="mono">#{{ job.document_id }}</span><br />
                   <span class="muted">{{ job.document.original_filename }}</span>
@@ -88,15 +93,39 @@
                 <td class="mono">{{ job.comparison_id|default:"-" }}</td>
                 <td class="mono">{{ job.duration_ms|default:"-" }} ms</td>
                 <td class="mono">{{ job.created_at|date:"Y-m-d H:i" }}</td>
+                <td>
+                  <div class="actions dr-row-actions">
+                    <button
+                      type="button"
+                      class="ghost"
+                      data-document-ingest-uuid="{{ job.document.uuid }}"
+                      data-ingest-mode="create_new"
+                      data-ingest-profile="{{ job.profile|default:'' }}"
+                      data-action-tenant-id="{{ job.tenant_id }}"
+                      data-action-scope="documents:write"
+                    >Run again</button>
+                    {% if job.status == "FAILED" or job.status == "QUARANTINED" %}
+                      <button
+                        type="button"
+                        class="ghost"
+                        data-job-retry="{{ job.id }}"
+                        data-action-tenant-id="{{ job.tenant_id }}"
+                        data-action-scope="jobs:write"
+                      >Retry</button>
+                    {% endif %}
+                  </div>
+                </td>
               </tr>
             {% empty %}
               <tr>
-                <td colspan="8" class="text-muted">No jobs match the current filters.</td>
+                <td colspan="10" class="text-muted">No jobs match the current filters.</td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      <div class="muted" data-job-action-status>No job action submitted.</div>
+      <pre class="metrics dr-json-preview" data-job-action-result>No job action yet.</pre>
     </div>
   </section>
 {% endblock %}

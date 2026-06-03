@@ -455,6 +455,442 @@ def _retry_job(
     return Response(JobSerializer(job).data)
 
 
+def create_document_for_api_key(api_key, data, request) -> Response:
+    serializer = DocumentUploadSerializer(data=data)
+    serializer.is_valid(raise_exception=True)
+
+    uploaded = serializer.validated_data["file"]
+    ingest = serializer.validated_data.get("ingest", False)
+    options_json = serializer.validated_data.get("options_json", None)
+    external_uuid = serializer.validated_data.get("external_uuid", None)
+    profile = serializer.validated_data.get("profile", None)
+    duplicate_policy = serializer.validated_data.get("duplicate_policy", "conflict")
+
+    content_type = (uploaded.content_type or "").strip().lower()
+    allowed_upload_mime_types = [
+        str(item).strip().lower()
+        for item in (api_key.allowed_upload_mime_types or DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
+        if str(item).strip()
+    ]
+    if not allowed_upload_mime_types:
+        allowed_upload_mime_types = list(DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
+
+    if content_type not in allowed_upload_mime_types:
+        return Response(
+            {
+                "error_code": "UNSUPPORTED_MEDIA_TYPE",
+                "message": (
+                    "File type is not allowed for this API key. "
+                    f"Allowed types: {', '.join(allowed_upload_mime_types)}."
+                ),
+            },
+            status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+    if content_type in ("application/pdf", "application/x-pdf") and not _looks_like_pdf(uploaded):
+        return Response(
+            {"error_code": "INVALID_PDF", "message": "File does not look like a PDF."},
+            status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+
+    max_bytes = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
+    if uploaded.size and uploaded.size > max_bytes:
+        return Response(
+            {"error_code": "FILE_TOO_LARGE", "message": "File exceeds size limit."},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
+    tenant_id = api_key.tenant_id
+    filename = uploaded.name
+
+    doc = Document(
+        tenant=api_key.tenant,
+        created_by_key=api_key,
+        external_uuid=external_uuid,
+        original_filename=filename,
+        mime_type=content_type or "application/pdf",
+        size_bytes=0,
+        storage_relpath_quarantine="",
+    )
+    relpath = os.path.join("uploads", "quarantine", str(tenant_id), f"{doc.uuid}.pdf")
+    abs_path = os.path.join(settings.DATA_ROOT, relpath)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+    hasher = hashlib.sha256()
+    size_bytes = 0
+    try:
+        with open(abs_path, "wb") as out:
+            for chunk in uploaded.chunks():
+                size_bytes += len(chunk)
+                if size_bytes > max_bytes:
+                    raise ValueError("file_too_large")
+                hasher.update(chunk)
+                out.write(chunk)
+    except ValueError:
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        return Response(
+            {"error_code": "FILE_TOO_LARGE", "message": "File exceeds size limit."},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
+    doc.sha256 = hasher.hexdigest()
+    doc.size_bytes = size_bytes
+    doc.storage_relpath_quarantine = relpath
+    existing_doc = Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).first()
+    if existing_doc:
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        return _duplicate_document_response(existing_doc, request, duplicate_policy)
+    try:
+        doc.save()
+    except IntegrityError:
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        existing_doc = Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).first()
+        if existing_doc:
+            return _duplicate_document_response(existing_doc, request, duplicate_policy)
+        raise
+
+    job_id = None
+    if ingest:
+        try:
+            options_json = _build_ingestion_options(api_key, options_json, profile)
+        except ValidationError as exc:
+            quarantine_path = doc.get_quarantine_path()
+            if quarantine_path and os.path.exists(quarantine_path):
+                os.remove(quarantine_path)
+            doc.delete()
+            message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+            return Response(
+                {"error_code": "INVALID_OPTIONS", "message": message},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        job = _create_ingestion_job(
+            api_key,
+            doc,
+            options_json=options_json,
+            profile=profile,
+        )
+        job_id = job.id
+        try:
+            start_ingestion_pipeline(job_id)
+        except Exception:
+            IngestionJob.objects.filter(pk=job_id).delete()
+            _safe_remove_file(doc.get_quarantine_path())
+            doc.delete()
+            return _queue_unavailable_response()
+
+    payload = DocumentSerializer(doc).data
+    if job_id:
+        payload["job_id"] = job_id
+    return Response(payload, status=status.HTTP_201_CREATED)
+
+
+def ingest_document_for_api_key(api_key, document_uuid, data) -> Response:
+    serializer = DocumentIngestSerializer(data=data)
+    serializer.is_valid(raise_exception=True)
+
+    document = Document.objects.filter(
+        tenant=api_key.tenant,
+        uuid=document_uuid,
+    ).first()
+    if not document:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    profile = serializer.validated_data.get("profile", None)
+    mode = serializer.validated_data.get("mode", "reuse_existing")
+    if mode == "retry_failed" and not _has_any_scope(api_key, {"jobs:write"}):
+        return _scope_denied_response()
+    try:
+        options_json = _build_ingestion_options(
+            api_key,
+            serializer.validated_data.get("options_json", None),
+            profile,
+        )
+    except ValidationError as exc:
+        message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+        return Response(
+            {"error_code": "INVALID_OPTIONS", "message": message},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    jobs = _matching_jobs(document, profile, options_json)
+
+    if mode == "reuse_existing":
+        existing_job = jobs.filter(
+            status__in=(
+                IngestionJobStatus.QUEUED,
+                IngestionJobStatus.RUNNING,
+                IngestionJobStatus.SUCCEEDED,
+            )
+        ).first()
+        if existing_job:
+            return Response(
+                _ingest_job_payload(
+                    document,
+                    existing_job,
+                    mode=mode,
+                    created=False,
+                    reused=True,
+                ),
+                status=status.HTTP_200_OK,
+            )
+
+    if mode == "retry_failed":
+        retry_job = jobs.filter(
+            status__in=(IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED)
+        ).first()
+        if not retry_job:
+            return Response(
+                {
+                    "error_code": "NOT_RETRYABLE",
+                    "message": "No retryable job exists for this document and options.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if retry_job.attempt >= retry_job.max_retries:
+            return _retry_job(retry_job)
+        source = _copy_document_source_for_job(document)
+        if not source:
+            return _missing_source_response()
+        retry_response = _retry_job(
+            retry_job,
+            source_relpath=source[0],
+            source_abs_path=source[1],
+        )
+        if retry_response.status_code != status.HTTP_200_OK:
+            return retry_response
+        retry_job.refresh_from_db()
+        return Response(
+            _ingest_job_payload(
+                document,
+                retry_job,
+                mode=mode,
+                created=False,
+                retried=True,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+    source = _copy_document_source_for_job(document)
+    if not source:
+        return _missing_source_response()
+    source_relpath, source_abs_path = source
+    job = _create_ingestion_job(
+        api_key,
+        document,
+        options_json=options_json,
+        profile=profile,
+        source_relpath=source_relpath,
+    )
+    try:
+        start_ingestion_pipeline(job.id)
+    except Exception:
+        job.delete()
+        _safe_remove_file(source_abs_path)
+        return _queue_unavailable_response()
+
+    return Response(
+        _ingest_job_payload(
+            document,
+            job,
+            mode=mode,
+            created=True,
+        ),
+        status=status.HTTP_201_CREATED,
+    )
+
+
+def retry_job_for_api_key(api_key, job_id) -> Response:
+    if not _has_any_scope(api_key, {"jobs:write"}):
+        return _scope_denied_response()
+    job = IngestionJob.objects.filter(tenant=api_key.tenant, pk=job_id).first()
+    if not job:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
+        return _retry_job(job)
+    if job.attempt >= job.max_retries:
+        return _retry_job(job)
+    source = _copy_document_source_for_job(job.document)
+    if source:
+        return _retry_job(job, source_relpath=source[0], source_abs_path=source[1])
+    if job.source_relpath and os.path.exists(os.path.join(settings.DATA_ROOT, job.source_relpath)):
+        return _retry_job(job)
+    return _missing_source_response()
+
+
+def compare_document_for_api_key(api_key, document_id, data) -> Response:
+    document = Document.objects.filter(tenant=api_key.tenant, pk=document_id).first()
+    if not document:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    serializer = DocumentCompareSerializer(data=data)
+    serializer.is_valid(raise_exception=True)
+    profiles = serializer.validated_data["profiles"]
+    base_options = serializer.validated_data.get("options_json", None)
+
+    source_path = document.get_quarantine_path()
+    if source_path and os.path.exists(source_path):
+        source_abs = source_path
+    else:
+        clean_path = document.get_clean_path()
+        if not clean_path or not os.path.exists(clean_path):
+            return Response(
+                {"error_code": "MISSING_SOURCE_FILE", "message": "Document file is missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        source_abs = clean_path
+
+    comparison_id = uuid.uuid4()
+    jobs = []
+    created_jobs = []
+    created_source_paths_by_job = {}
+    for profile in profiles:
+        try:
+            resolved = resolve_effective_options(api_key, base_options, profile)
+            options_json = resolved["effective_options"]
+            validate_docling_options(options_json)
+        except ValidationError as exc:
+            message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
+            return Response(
+                {"error_code": "INVALID_OPTIONS", "message": message},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        relpath = os.path.join(
+            "uploads",
+            "quarantine",
+            str(document.tenant_id),
+            f"{document.uuid}-{uuid.uuid4()}.pdf",
+        )
+        abs_path = os.path.join(settings.DATA_ROOT, relpath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        shutil.copy2(source_abs, abs_path)
+
+        job = IngestionJob.objects.create(
+            tenant=api_key.tenant,
+            created_by_key=api_key,
+            document=document,
+            external_uuid=document.external_uuid,
+            profile=profile,
+            comparison_id=comparison_id,
+            source_relpath=relpath,
+            status=IngestionJobStatus.QUEUED,
+            stage=IngestionStage.SCANNING,
+            queued_at=timezone.now(),
+            options_json=options_json or {},
+        )
+        created_jobs.append(job)
+        created_source_paths_by_job[job.id] = abs_path
+
+    queued_job_ids = set()
+    try:
+        for job in created_jobs:
+            start_ingestion_pipeline(job.id)
+            queued_job_ids.add(job.id)
+            jobs.append({"job_id": job.id, "profile": job.profile})
+    except Exception:
+        rollback_jobs = [job for job in created_jobs if job.id not in queued_job_ids]
+        rollback_paths = [
+            created_source_paths_by_job[job.id]
+            for job in rollback_jobs
+            if job.id in created_source_paths_by_job
+        ]
+        _rollback_created_jobs(rollback_jobs, rollback_paths)
+        if jobs:
+            return Response(
+                {
+                    "error_code": "PARTIAL_QUEUE_FAILURE",
+                    "message": (
+                        "Some comparison jobs were queued, but not all profiles could "
+                        "be submitted. Track the returned jobs before retrying."
+                    ),
+                    "comparison_id": str(comparison_id),
+                    "document_id": document.id,
+                    "jobs": jobs,
+                    "failed_profiles": [job.profile for job in rollback_jobs],
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+        return _queue_unavailable_response()
+
+    return Response(
+        {"comparison_id": str(comparison_id), "document_id": document.id, "jobs": jobs},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+def preview_artifact_for_api_key(api_key, artifact_id) -> Response:
+    if not _has_any_scope(api_key, {"artifacts:read"}):
+        return _scope_denied_response()
+    artifact = Artifact.objects.filter(tenant=api_key.tenant, pk=artifact_id).first()
+    if not artifact:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+    if not os.path.exists(abs_path):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    payload = {
+        "id": artifact.id,
+        "kind": artifact.kind,
+        "job_id": artifact.job_id,
+        "size_bytes": artifact.size_bytes,
+        "content_type": artifact.content_type,
+        "checksum_sha256": artifact.checksum_sha256,
+        "preview_limit_bytes": ARTIFACT_PREVIEW_BYTES,
+        "truncated": False,
+    }
+
+    if artifact.kind == ArtifactKind.FIGURES_ZIP or artifact.content_type == "application/zip":
+        try:
+            with zipfile.ZipFile(abs_path, "r") as archive:
+                infos = archive.infolist()
+                entries = [
+                    {
+                        "filename": info.filename,
+                        "size_bytes": info.file_size,
+                        "compressed_size_bytes": info.compress_size,
+                    }
+                    for info in infos[:ARTIFACT_PREVIEW_ZIP_ENTRIES]
+                ]
+        except zipfile.BadZipFile:
+            return Response(
+                {"error_code": "INVALID_ZIP", "message": "Artifact is not a valid ZIP file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payload.update(
+            {
+                "preview_type": "zip_metadata",
+                "entries": entries,
+                "entry_count": len(infos),
+                "entries_truncated": len(infos) > ARTIFACT_PREVIEW_ZIP_ENTRIES,
+            }
+        )
+        return Response(payload)
+
+    with open(abs_path, "rb") as handle:
+        raw = handle.read(ARTIFACT_PREVIEW_BYTES + 1)
+    truncated = len(raw) > ARTIFACT_PREVIEW_BYTES
+    if truncated:
+        raw = raw[:ARTIFACT_PREVIEW_BYTES]
+    text = raw.decode("utf-8", errors="replace")
+    payload["truncated"] = truncated
+
+    if artifact.kind in (ArtifactKind.DOCLING_JSON, ArtifactKind.CHUNKS_JSON):
+        if artifact.kind == ArtifactKind.CHUNKS_JSON:
+            payload["compatibility_note"] = (
+                "DocTags compatibility payload, not real chunking yet."
+            )
+        if not truncated:
+            try:
+                payload.update({"preview_type": "json", "json": json.loads(text)})
+                return Response(payload)
+            except json.JSONDecodeError:
+                pass
+
+    payload.update({"preview_type": "text", "text": text})
+    return Response(payload)
+
+
 class DocumentViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
@@ -479,347 +915,15 @@ class DocumentViewSet(
         return Document.objects.filter(tenant=api_key.tenant).order_by("-created_at")
 
     def create(self, request, *args, **kwargs):
-        serializer = DocumentUploadSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        uploaded = serializer.validated_data["file"]
-        ingest = serializer.validated_data.get("ingest", False)
-        options_json = serializer.validated_data.get("options_json", None)
-        external_uuid = serializer.validated_data.get("external_uuid", None)
-        profile = serializer.validated_data.get("profile", None)
-        duplicate_policy = serializer.validated_data.get("duplicate_policy", "conflict")
-
-        content_type = (uploaded.content_type or "").strip().lower()
-        api_key = request.auth
-        allowed_upload_mime_types = [
-            str(item).strip().lower()
-            for item in (api_key.allowed_upload_mime_types or DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
-            if str(item).strip()
-        ]
-        if not allowed_upload_mime_types:
-            allowed_upload_mime_types = list(DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)
-
-        if content_type not in allowed_upload_mime_types:
-            return Response(
-                {
-                    "error_code": "UNSUPPORTED_MEDIA_TYPE",
-                    "message": (
-                        "File type is not allowed for this API key. "
-                        f"Allowed types: {', '.join(allowed_upload_mime_types)}."
-                    ),
-                },
-                status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            )
-        if content_type in ("application/pdf", "application/x-pdf") and not _looks_like_pdf(uploaded):
-            return Response(
-                {"error_code": "INVALID_PDF", "message": "File does not look like a PDF."},
-                status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            )
-
-        max_bytes = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
-        if uploaded.size and uploaded.size > max_bytes:
-            return Response(
-                {"error_code": "FILE_TOO_LARGE", "message": "File exceeds size limit."},
-                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            )
-
-        tenant_id = api_key.tenant_id
-        filename = uploaded.name
-
-        doc = Document(
-            tenant=api_key.tenant,
-            created_by_key=api_key,
-            external_uuid=external_uuid,
-            original_filename=filename,
-            mime_type=content_type or "application/pdf",
-            size_bytes=0,
-            storage_relpath_quarantine="",
-        )
-        relpath = os.path.join("uploads", "quarantine", str(tenant_id), f"{doc.uuid}.pdf")
-        abs_path = os.path.join(settings.DATA_ROOT, relpath)
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-
-        hasher = hashlib.sha256()
-        size_bytes = 0
-        try:
-            with open(abs_path, "wb") as out:
-                for chunk in uploaded.chunks():
-                    size_bytes += len(chunk)
-                    if size_bytes > max_bytes:
-                        raise ValueError("file_too_large")
-                    hasher.update(chunk)
-                    out.write(chunk)
-        except ValueError:
-            if os.path.exists(abs_path):
-                os.remove(abs_path)
-            return Response(
-                {"error_code": "FILE_TOO_LARGE", "message": "File exceeds size limit."},
-                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            )
-
-        doc.sha256 = hasher.hexdigest()
-        doc.size_bytes = size_bytes
-        doc.storage_relpath_quarantine = relpath
-        existing_doc = Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).first()
-        if existing_doc:
-            if os.path.exists(abs_path):
-                os.remove(abs_path)
-            return _duplicate_document_response(existing_doc, request, duplicate_policy)
-        try:
-            doc.save()
-        except IntegrityError:
-            if os.path.exists(abs_path):
-                os.remove(abs_path)
-            existing_doc = Document.objects.filter(tenant=api_key.tenant, sha256=doc.sha256).first()
-            if existing_doc:
-                return _duplicate_document_response(existing_doc, request, duplicate_policy)
-            raise
-
-        job_id = None
-        if ingest:
-            try:
-                options_json = _build_ingestion_options(api_key, options_json, profile)
-            except ValidationError as exc:
-                quarantine_path = doc.get_quarantine_path()
-                if quarantine_path and os.path.exists(quarantine_path):
-                    os.remove(quarantine_path)
-                doc.delete()
-                message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
-                return Response(
-                    {"error_code": "INVALID_OPTIONS", "message": message},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            job = _create_ingestion_job(
-                api_key,
-                doc,
-                options_json=options_json,
-                profile=profile,
-            )
-            job_id = job.id
-            try:
-                start_ingestion_pipeline(job_id)
-            except Exception:
-                IngestionJob.objects.filter(pk=job_id).delete()
-                _safe_remove_file(doc.get_quarantine_path())
-                doc.delete()
-                return _queue_unavailable_response()
-
-        payload = DocumentSerializer(doc).data
-        if job_id:
-            payload["job_id"] = job_id
-        return Response(payload, status=status.HTTP_201_CREATED)
+        return create_document_for_api_key(request.auth, request.data, request)
 
     def ingest_by_uuid(self, request, document_uuid=None):
-        serializer = DocumentIngestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        document = Document.objects.filter(
-            tenant=request.auth.tenant,
-            uuid=document_uuid,
-        ).first()
-        if not document:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        profile = serializer.validated_data.get("profile", None)
-        mode = serializer.validated_data.get("mode", "reuse_existing")
-        if mode == "retry_failed" and not _has_any_scope(request.auth, {"jobs:write"}):
-            return _scope_denied_response()
-        try:
-            options_json = _build_ingestion_options(
-                request.auth,
-                serializer.validated_data.get("options_json", None),
-                profile,
-            )
-        except ValidationError as exc:
-            message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
-            return Response(
-                {"error_code": "INVALID_OPTIONS", "message": message},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        jobs = _matching_jobs(document, profile, options_json)
-
-        if mode == "reuse_existing":
-            existing_job = jobs.filter(
-                status__in=(
-                    IngestionJobStatus.QUEUED,
-                    IngestionJobStatus.RUNNING,
-                    IngestionJobStatus.SUCCEEDED,
-                )
-            ).first()
-            if existing_job:
-                return Response(
-                    _ingest_job_payload(
-                        document,
-                        existing_job,
-                        mode=mode,
-                        created=False,
-                        reused=True,
-                    ),
-                    status=status.HTTP_200_OK,
-                )
-
-        if mode == "retry_failed":
-            retry_job = jobs.filter(
-                status__in=(IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED)
-            ).first()
-            if not retry_job:
-                return Response(
-                    {
-                        "error_code": "NOT_RETRYABLE",
-                        "message": "No retryable job exists for this document and options.",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if retry_job.attempt >= retry_job.max_retries:
-                return _retry_job(retry_job)
-            source = _copy_document_source_for_job(document)
-            if not source:
-                return _missing_source_response()
-            retry_response = _retry_job(
-                retry_job,
-                source_relpath=source[0],
-                source_abs_path=source[1],
-            )
-            if retry_response.status_code != status.HTTP_200_OK:
-                return retry_response
-            retry_job.refresh_from_db()
-            return Response(
-                _ingest_job_payload(
-                    document,
-                    retry_job,
-                    mode=mode,
-                    created=False,
-                    retried=True,
-                ),
-                status=status.HTTP_200_OK,
-            )
-
-        source = _copy_document_source_for_job(document)
-        if not source:
-            return _missing_source_response()
-        source_relpath, source_abs_path = source
-        job = _create_ingestion_job(
-            request.auth,
-            document,
-            options_json=options_json,
-            profile=profile,
-            source_relpath=source_relpath,
-        )
-        try:
-            start_ingestion_pipeline(job.id)
-        except Exception:
-            job.delete()
-            _safe_remove_file(source_abs_path)
-            return _queue_unavailable_response()
-
-        return Response(
-            _ingest_job_payload(
-                document,
-                job,
-                mode=mode,
-                created=True,
-            ),
-            status=status.HTTP_201_CREATED,
-        )
+        return ingest_document_for_api_key(request.auth, document_uuid, request.data)
 
     @action(detail=True, methods=["post"], url_path="compare")
     def compare(self, request, pk=None):
-        document = self.get_object()
-        serializer = DocumentCompareSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        profiles = serializer.validated_data["profiles"]
-        base_options = serializer.validated_data.get("options_json", None)
-
-        source_path = document.get_quarantine_path()
-        if source_path and os.path.exists(source_path):
-            source_abs = source_path
-        else:
-            clean_path = document.get_clean_path()
-            if not clean_path or not os.path.exists(clean_path):
-                return Response(
-                    {"error_code": "MISSING_SOURCE_FILE", "message": "Document file is missing."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            source_abs = clean_path
-
-        comparison_id = uuid.uuid4()
-        jobs = []
-        created_jobs = []
-        created_source_paths_by_job = {}
-        for profile in profiles:
-            try:
-                resolved = resolve_effective_options(request.auth, base_options, profile)
-                options_json = resolved["effective_options"]
-                validate_docling_options(options_json)
-            except ValidationError as exc:
-                message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
-                return Response(
-                    {"error_code": "INVALID_OPTIONS", "message": message},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            relpath = os.path.join(
-                "uploads",
-                "quarantine",
-                str(document.tenant_id),
-                f"{document.uuid}-{uuid.uuid4()}.pdf",
-            )
-            abs_path = os.path.join(settings.DATA_ROOT, relpath)
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            shutil.copy2(source_abs, abs_path)
-
-            job = IngestionJob.objects.create(
-                tenant=request.auth.tenant,
-                created_by_key=request.auth,
-                document=document,
-                external_uuid=document.external_uuid,
-                profile=profile,
-                comparison_id=comparison_id,
-                source_relpath=relpath,
-                status=IngestionJobStatus.QUEUED,
-                stage=IngestionStage.SCANNING,
-                queued_at=timezone.now(),
-                options_json=options_json or {},
-            )
-            created_jobs.append(job)
-            created_source_paths_by_job[job.id] = abs_path
-
-        queued_job_ids = set()
-        try:
-            for job in created_jobs:
-                start_ingestion_pipeline(job.id)
-                queued_job_ids.add(job.id)
-                jobs.append({"job_id": job.id, "profile": job.profile})
-        except Exception:
-            rollback_jobs = [job for job in created_jobs if job.id not in queued_job_ids]
-            rollback_paths = [
-                created_source_paths_by_job[job.id]
-                for job in rollback_jobs
-                if job.id in created_source_paths_by_job
-            ]
-            _rollback_created_jobs(rollback_jobs, rollback_paths)
-            if jobs:
-                return Response(
-                    {
-                        "error_code": "PARTIAL_QUEUE_FAILURE",
-                        "message": (
-                            "Some comparison jobs were queued, but not all profiles could "
-                            "be submitted. Track the returned jobs before retrying."
-                        ),
-                        "comparison_id": str(comparison_id),
-                        "document_id": document.id,
-                        "jobs": jobs,
-                        "failed_profiles": [job.profile for job in rollback_jobs],
-                    },
-                    status=status.HTTP_202_ACCEPTED,
-                )
-            return _queue_unavailable_response()
-
-        return Response(
-            {"comparison_id": str(comparison_id), "document_id": document.id, "jobs": jobs},
-            status=status.HTTP_201_CREATED,
-        )
+        self.get_object()
+        return compare_document_for_api_key(request.auth, pk, request.data)
 
 
 class ArtifactViewSet(
@@ -873,71 +977,8 @@ class ArtifactViewSet(
 
     @action(detail=True, methods=["get"], url_path="preview")
     def preview(self, request, pk=None):
-        artifact = self.get_object()
-        abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
-        if not os.path.exists(abs_path):
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        payload = {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "job_id": artifact.job_id,
-            "size_bytes": artifact.size_bytes,
-            "content_type": artifact.content_type,
-            "checksum_sha256": artifact.checksum_sha256,
-            "preview_limit_bytes": ARTIFACT_PREVIEW_BYTES,
-            "truncated": False,
-        }
-
-        if artifact.kind == ArtifactKind.FIGURES_ZIP or artifact.content_type == "application/zip":
-            try:
-                with zipfile.ZipFile(abs_path, "r") as archive:
-                    infos = archive.infolist()
-                    entries = [
-                        {
-                            "filename": info.filename,
-                            "size_bytes": info.file_size,
-                            "compressed_size_bytes": info.compress_size,
-                        }
-                        for info in infos[:ARTIFACT_PREVIEW_ZIP_ENTRIES]
-                    ]
-            except zipfile.BadZipFile:
-                return Response(
-                    {"error_code": "INVALID_ZIP", "message": "Artifact is not a valid ZIP file."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            payload.update(
-                {
-                    "preview_type": "zip_metadata",
-                    "entries": entries,
-                    "entry_count": len(infos),
-                    "entries_truncated": len(infos) > ARTIFACT_PREVIEW_ZIP_ENTRIES,
-                }
-            )
-            return Response(payload)
-
-        with open(abs_path, "rb") as handle:
-            raw = handle.read(ARTIFACT_PREVIEW_BYTES + 1)
-        truncated = len(raw) > ARTIFACT_PREVIEW_BYTES
-        if truncated:
-            raw = raw[:ARTIFACT_PREVIEW_BYTES]
-        text = raw.decode("utf-8", errors="replace")
-        payload["truncated"] = truncated
-
-        if artifact.kind in (ArtifactKind.DOCLING_JSON, ArtifactKind.CHUNKS_JSON):
-            if artifact.kind == ArtifactKind.CHUNKS_JSON:
-                payload["compatibility_note"] = (
-                    "DocTags compatibility payload, not real chunking yet."
-                )
-            if not truncated:
-                try:
-                    payload.update({"preview_type": "json", "json": json.loads(text)})
-                    return Response(payload)
-                except json.JSONDecodeError:
-                    pass
-
-        payload.update({"preview_type": "text", "text": text})
-        return Response(payload)
+        self.get_object()
+        return preview_artifact_for_api_key(request.auth, pk)
 
 
 class JobViewSet(
@@ -1059,17 +1100,8 @@ class JobViewSet(
 
     @action(detail=True, methods=["post"], url_path="retry")
     def retry(self, request, pk=None):
-        job = self.get_object()
-        if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
-            return _retry_job(job)
-        if job.attempt >= job.max_retries:
-            return _retry_job(job)
-        source = _copy_document_source_for_job(job.document)
-        if source:
-            return _retry_job(job, source_relpath=source[0], source_abs_path=source[1])
-        if job.source_relpath and os.path.exists(os.path.join(settings.DATA_ROOT, job.source_relpath)):
-            return _retry_job(job)
-        return _missing_source_response()
+        self.get_object()
+        return retry_job_for_api_key(request.auth, pk)
 
 
 class WebhookEndpointViewSet(

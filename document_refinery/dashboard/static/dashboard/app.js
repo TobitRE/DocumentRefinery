@@ -81,6 +81,35 @@
     return (qs("#apiKeyInput", root)?.value || "").trim();
   }
 
+  function getCookie(name) {
+    return document.cookie
+      .split(";")
+      .map((item) => item.trim())
+      .find((item) => item.startsWith(`${name}=`))
+      ?.slice(name.length + 1) || "";
+  }
+
+  function hasDashboardContext(root = document) {
+    return Boolean(qs("[data-dashboard-context]", root) || qs("[data-dashboard-context]", document));
+  }
+
+  function getDashboardKeyId(root = document) {
+    return (
+      qs("[data-dashboard-key-select]", root)?.value ||
+      qs("[data-dashboard-key-select]", document)?.value ||
+      localStorage.getItem("drDashboardApiKeyId") ||
+      ""
+    );
+  }
+
+  function errorMessageFromPayload(payload, fallback) {
+    if (!payload || typeof payload !== "object") return fallback;
+    if (payload.message) return payload.message;
+    if (payload.error_code) return payload.error_code;
+    if (payload.details) return `${fallback}: ${formatJson(payload.details)}`;
+    return fallback;
+  }
+
   async function apiFetch(path, options = {}, root = document) {
     const key = getApiKey(root);
     if (!key) throw new Error("Add an API key for this page.");
@@ -98,6 +127,140 @@
       throw new Error(message);
     }
     return response.json();
+  }
+
+  async function dashboardFetch(path, options = {}, root = document) {
+    const method = (options.method || "GET").toUpperCase();
+    const apiKeyId = getDashboardKeyId(root);
+    if (!apiKeyId) throw new Error("Select a dashboard test key first.");
+
+    const headers = options.headers ? { ...options.headers } : {};
+    let body = options.body;
+    let url = new URL(path, window.location.origin);
+    if (method === "GET") {
+      url.searchParams.set("api_key_id", apiKeyId);
+    } else if (body instanceof FormData) {
+      if (!body.has("api_key_id")) body.append("api_key_id", apiKeyId);
+      headers["X-CSRFToken"] = decodeURIComponent(getCookie("csrftoken"));
+    } else {
+      let payload = {};
+      if (typeof body === "string" && body.trim()) {
+        payload = JSON.parse(body);
+      } else if (body && typeof body === "object") {
+        payload = body;
+      }
+      payload.api_key_id = payload.api_key_id || apiKeyId;
+      body = JSON.stringify(payload);
+      headers["Content-Type"] = headers["Content-Type"] || "application/json";
+      headers["X-CSRFToken"] = decodeURIComponent(getCookie("csrftoken"));
+    }
+
+    const response = await fetch(url.toString(), { ...options, method, headers, body });
+    const contentType = response.headers.get("content-type") || "";
+    let payload = null;
+    if (contentType.includes("application/json")) {
+      payload = await response.json();
+    } else {
+      const text = await response.text();
+      payload = text ? { message: text } : {};
+    }
+    if (!response.ok) {
+      throw new Error(errorMessageFromPayload(payload, `Request failed (${response.status})`));
+    }
+    return payload;
+  }
+
+  function renderDashboardKeyScopes(target, key) {
+    if (!target) return;
+    target.innerHTML = "";
+    (key?.scopes || []).forEach((scope) => {
+      const item = document.createElement("span");
+      item.className = "status status-neutral";
+      item.textContent = scope;
+      target.appendChild(item);
+    });
+  }
+
+  function syncTenantActionAvailability(selectedKey) {
+    qsa("[data-action-tenant-id]").forEach((btn) => {
+      const requiredTenantId = btn.dataset.actionTenantId;
+      const requiredScope = btn.dataset.actionScope;
+      const tenantMismatch = requiredTenantId && String(requiredTenantId) !== String(selectedKey?.tenant_id || "");
+      const missingScope = requiredScope && !(selectedKey?.scopes || []).includes(requiredScope);
+      btn.disabled = Boolean(tenantMismatch || missingScope);
+      if (tenantMismatch) {
+        btn.title = "Select a dashboard key for this tenant to enable this action.";
+      } else if (missingScope) {
+        btn.title = `Selected key needs ${requiredScope}.`;
+      } else {
+        btn.removeAttribute("title");
+      }
+    });
+  }
+
+  async function loadDashboardContext(root = document) {
+    const contexts = qsa("[data-dashboard-context]", root);
+    if (!contexts.length) return;
+    let payload;
+    try {
+      const response = await fetch("/dashboard/api/context");
+      payload = await response.json();
+      if (!response.ok) throw new Error(errorMessageFromPayload(payload, "Could not load keys."));
+    } catch (err) {
+      contexts.forEach((context) => {
+        setText("[data-dashboard-context-status]", err.message, context);
+      });
+      return;
+    }
+
+    const storedId = localStorage.getItem("drDashboardApiKeyId");
+    const keys = payload.keys || [];
+    const storedStillValid = keys.some((key) => String(key.id) === String(storedId));
+    const selectedId = storedStillValid ? storedId : payload.default_key_id;
+    contexts.forEach((context) => {
+      const select = qs("[data-dashboard-key-select]", context);
+      if (select) {
+        select.innerHTML = "";
+        if (!keys.length) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No active API keys";
+          select.appendChild(option);
+        }
+        keys.forEach((key) => {
+          const option = document.createElement("option");
+          option.value = key.id;
+          option.textContent = `${key.is_dashboard_test_key ? "Test - " : ""}${key.name} / ${key.tenant_name} (${key.prefix})`;
+          option.selected = String(key.id) === String(selectedId);
+          select.appendChild(option);
+        });
+        if (select.value) localStorage.setItem("drDashboardApiKeyId", select.value);
+      }
+      const selectedKey = keys.find((key) => String(key.id) === String(select?.value));
+      setText(
+        "[data-dashboard-context-status]",
+        selectedKey
+          ? `Using ${selectedKey.name} for tenant ${selectedKey.tenant_name}.`
+          : "Create an active API key before using dashboard actions.",
+        context
+      );
+      renderDashboardKeyScopes(qs("[data-dashboard-context-scopes]", context), selectedKey);
+      syncTenantActionAvailability(selectedKey);
+    });
+    document.dispatchEvent(new CustomEvent("dr:dashboard-context-ready"));
+  }
+
+  function initDashboardContext(root = document) {
+    qsa("[data-dashboard-context]", root).forEach((context) => {
+      qs("[data-dashboard-context-refresh]", context)?.addEventListener("click", () => {
+        loadDashboardContext(root);
+      });
+      qs("[data-dashboard-key-select]", context)?.addEventListener("change", (event) => {
+        localStorage.setItem("drDashboardApiKeyId", event.target.value);
+        loadDashboardContext(root);
+      });
+    });
+    loadDashboardContext(root);
   }
 
   function initApiKeyPanel(root = document) {
@@ -348,15 +511,14 @@
           try {
             applyStructuredOptions(controls, textarea);
             const profile = qs("[data-options-profile]", controls)?.value || "";
-            const payload = await apiFetch(
-              "/v1/docling/options/resolve/",
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ profile, options_json: readJson(textarea) }),
-              },
-              document
-            );
+            const requestOptions = {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ profile, options_json: readJson(textarea) }),
+            };
+            const payload = hasDashboardContext(document)
+              ? await dashboardFetch("/dashboard/api/docling/options/resolve/", requestOptions, document)
+              : await apiFetch("/v1/docling/options/resolve/", requestOptions, document);
             if (resolveOutput) resolveOutput.textContent = formatJson(payload);
             if (status) {
               status.textContent = "Effective options resolved by backend.";
@@ -377,6 +539,125 @@
   function renderPanel(node, payload) {
     if (!node) return;
     node.textContent = typeof payload === "string" ? payload : formatJson(payload);
+  }
+
+  function documentFromUploadPayload(payload) {
+    return payload?.document || payload;
+  }
+
+  function actionRootFor(node) {
+    return (
+      node?.closest("[data-upload-page]") ||
+      node?.closest("[data-job-detail-page]") ||
+      node?.closest("[data-comparison-page]") ||
+      document
+    );
+  }
+
+  function profileForAction(root, trigger) {
+    const source = trigger?.dataset.ingestProfileSource;
+    if (source) return qs(source, root)?.value.trim() || "";
+    if (trigger?.dataset.ingestProfile !== undefined) return trigger.dataset.ingestProfile || "";
+    return qs("#uploadProfile", root)?.value.trim() || "";
+  }
+
+  function optionsForAction(root, trigger) {
+    const source = trigger?.dataset.ingestOptionsSource;
+    if (source) return readEffectiveDoclingOptions(root, source);
+    if (qs("#uploadOptionsJson", root)) return readEffectiveDoclingOptions(root, "#uploadOptionsJson");
+    return {};
+  }
+
+  function setActionStatus(root, message, className = "muted") {
+    const status = qs("[data-job-action-status]", root) || qs("[data-upload-status]", root);
+    if (status) {
+      status.textContent = message;
+      status.className = className;
+    }
+  }
+
+  function renderActionResult(root, payload) {
+    renderPanel(qs("[data-job-action-result]", root) || qs("[data-upload-result]", root), payload);
+  }
+
+  async function runDocumentIngest(documentUuid, { root = document, trigger = null, mode = "create_new" } = {}) {
+    const profile = profileForAction(root, trigger);
+    const options = optionsForAction(root, trigger);
+    const payload = { mode, options_json: options };
+    if (profile) payload.profile = profile;
+    const result = await dashboardFetch(
+      `/dashboard/api/documents/${documentUuid}/ingest/`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+      root
+    );
+    setActionStatus(root, `Job #${result.job_id} queued for document #${result.document?.id}.`);
+    renderActionResult(root, result);
+    return result;
+  }
+
+  async function retryDashboardJob(jobId, root = document) {
+    const result = await dashboardFetch(
+      `/dashboard/api/jobs/${jobId}/retry/`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+      root
+    );
+    setActionStatus(root, `Job #${jobId} retry queued.`);
+    renderActionResult(root, result);
+    return result;
+  }
+
+  function renderDocumentsTable(page, documents) {
+    const table = qs("[data-documents-table]", page);
+    if (!table) return;
+    table.innerHTML = "";
+    if (!documents.length) {
+      const row = document.createElement("tr");
+      row.innerHTML = '<td colspan="5" class="text-muted">No documents found for the selected key.</td>';
+      table.appendChild(row);
+      return;
+    }
+    documents.forEach((item) => {
+      const row = document.createElement("tr");
+      const latest = item.latest_job;
+      row.innerHTML = `
+        <td>
+          <span class="mono">#${item.id}</span><br />
+          <span>${item.original_filename || "-"}</span><br />
+          <span class="muted mono">${item.uuid}</span>
+        </td>
+        <td><span class="${statusClass(item.status)}">${item.status}</span></td>
+        <td>${latest ? `<a href="/dashboard/jobs/${latest.id}/">#${latest.id}</a> <span class="${statusClass(latest.status)}">${latest.status}</span>` : '<span class="muted">-</span>'}</td>
+        <td class="mono">${item.job_count || 0}</td>
+        <td>
+          <div class="actions dr-row-actions">
+            <button type="button" class="ghost" data-document-ingest-uuid="${item.uuid}" data-ingest-mode="create_new">Run new job</button>
+            <button type="button" class="ghost" data-document-ingest-uuid="${item.uuid}" data-ingest-mode="reuse_existing">Reuse if same</button>
+          </div>
+        </td>
+      `;
+      table.appendChild(row);
+    });
+  }
+
+  async function loadDocuments(page) {
+    if (!qs("[data-documents-table]", page)) return;
+    try {
+      const payload = await dashboardFetch("/dashboard/api/documents/", {}, page);
+      renderDocumentsTable(page, payload.documents || []);
+    } catch (err) {
+      const table = qs("[data-documents-table]", page);
+      if (table) {
+        table.innerHTML = `<tr><td colspan="5" class="text-muted">${err.message}</td></tr>`;
+      }
+    }
   }
 
   function initUploadPage(root = document) {
@@ -420,17 +701,32 @@
           for (const file of files) {
             const form = new FormData();
             form.append("file", file);
-            form.append("ingest", qs("#uploadIngest", page)?.checked ? "true" : "false");
+            form.append("ingest", "false");
+            form.append("duplicate_policy", "return_existing");
             if (externalUuid) form.append("external_uuid", externalUuid);
             if (profile) form.append("profile", profile);
             if (Object.keys(options).length) form.append("options_json", JSON.stringify(options));
-            results.push(await apiFetch("/v1/documents/", { method: "POST", body: form }, page));
+            const uploadPayload = await dashboardFetch(
+              "/dashboard/api/documents/",
+              { method: "POST", body: form },
+              page
+            );
+            const itemResult = { upload: uploadPayload };
+            const documentPayload = documentFromUploadPayload(uploadPayload);
+            if (qs("#uploadIngest", page)?.checked && documentPayload?.uuid) {
+              itemResult.ingest = await runDocumentIngest(
+                documentPayload.uuid,
+                { root: page, trigger: uploadBtn, mode: "create_new" }
+              );
+            }
+            results.push(itemResult);
           }
           renderPanel(result, files.length === 1 ? results[0] : { uploads: results });
           if (status) {
-            status.textContent = "Upload request completed.";
+            status.textContent = "Upload workflow completed.";
             status.className = "muted";
           }
+          loadDocuments(page);
         } catch (err) {
           if (status) {
             status.textContent = err.message;
@@ -439,6 +735,9 @@
         }
       });
     }
+
+    qs("[data-documents-refresh]", page)?.addEventListener("click", () => loadDocuments(page));
+    document.addEventListener("dr:dashboard-context-ready", () => loadDocuments(page));
   }
 
   function initJobDetailPage(root = document) {
@@ -449,7 +748,11 @@
     qsa("[data-artifact-preview]", page).forEach((btn) => {
       btn.addEventListener("click", async () => {
         try {
-          const payload = await apiFetch(`/v1/artifacts/${btn.dataset.artifactPreview}/preview/`, {}, page);
+          const payload = await dashboardFetch(
+            `/dashboard/api/artifacts/${btn.dataset.artifactPreview}/preview/`,
+            {},
+            page
+          );
           renderPanel(output, payload);
           if (status) {
             status.textContent = "Artifact preview loaded.";
@@ -462,6 +765,43 @@
           }
         }
       });
+    });
+  }
+
+  function initJobActions(root = document) {
+    root.addEventListener("click", async (event) => {
+      const ingestBtn = event.target.closest("[data-document-ingest-uuid]");
+      if (ingestBtn && root.contains(ingestBtn)) {
+        const page = actionRootFor(ingestBtn);
+        try {
+          ingestBtn.disabled = true;
+          setActionStatus(page, "Submitting document job...");
+          await runDocumentIngest(ingestBtn.dataset.documentIngestUuid, {
+            root: page,
+            trigger: ingestBtn,
+            mode: ingestBtn.dataset.ingestMode || "create_new",
+          });
+        } catch (err) {
+          setActionStatus(page, err.message, "error");
+        } finally {
+          ingestBtn.disabled = false;
+        }
+        return;
+      }
+
+      const retryBtn = event.target.closest("[data-job-retry]");
+      if (retryBtn && root.contains(retryBtn)) {
+        const page = actionRootFor(retryBtn);
+        try {
+          retryBtn.disabled = true;
+          setActionStatus(page, "Submitting retry...");
+          await retryDashboardJob(retryBtn.dataset.jobRetry, page);
+        } catch (err) {
+          setActionStatus(page, err.message, "error");
+        } finally {
+          retryBtn.disabled = false;
+        }
+      }
     });
   }
 
@@ -480,8 +820,8 @@
         const profiles = selectedProfiles();
         if (!profiles.length) throw new Error("Select at least one profile.");
         const options = readEffectiveDoclingOptions(page, "#compareOptionsJson");
-        const payload = await apiFetch(
-          `/v1/documents/${documentId}/compare/`,
+        const payload = await dashboardFetch(
+          `/dashboard/api/documents/${documentId}/compare/`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -506,7 +846,11 @@
       try {
         const comparisonId = qs("#compareIdInput", page)?.value.trim();
         if (!comparisonId) throw new Error("Enter a comparison id.");
-        const payload = await apiFetch(`/v1/jobs/?comparison_id=${encodeURIComponent(comparisonId)}`, {}, page);
+        const payload = await dashboardFetch(
+          `/dashboard/api/jobs/?comparison_id=${encodeURIComponent(comparisonId)}`,
+          {},
+          page
+        );
         renderPanel(result, payload);
         if (status) {
           status.textContent = "Comparison jobs loaded.";
@@ -538,10 +882,12 @@
   }
 
   function init() {
+    initDashboardContext();
     initApiKeyPanel();
     initDoclingOptionsControls();
     initUploadPage();
     initJobDetailPage();
+    initJobActions();
     initComparisonPage();
     initCopyButtons();
   }
@@ -549,6 +895,7 @@
   const dashboardApi = {
     apiFetch,
     badge,
+    dashboardFetch,
     formatBytes,
     formatJson,
     readJson,

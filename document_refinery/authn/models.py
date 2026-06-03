@@ -32,6 +32,7 @@ class APIKey(BaseModel):
     key_hash = models.CharField(max_length=64, editable=False, unique=True)
     scopes = models.JSONField(default=list, blank=True)
     active = models.BooleanField(default=True)
+    is_dashboard_test_key = models.BooleanField(default=False)
     last_used_at = models.DateTimeField(null=True, blank=True)
     docling_options_json = models.JSONField(null=True, blank=True)
     allowed_upload_mime_types = models.JSONField(

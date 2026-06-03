@@ -35,6 +35,7 @@
             <th>Tenant</th>
             <th>Prefix</th>
             <th>Scopes</th>
+            <th>Dashboard</th>
             <th>Status</th>
             <th>Last used</th>
             <th>Created</th>
@@ -47,13 +48,20 @@
               <td>{{ key.tenant.name }}</td>
               <td class="mono">{{ key.prefix }}</td>
               <td class="mono">{{ key.scopes|join:", " }}</td>
+              <td>
+                {% if key.is_dashboard_test_key %}
+                  <span class="status status-ok">test key</span>
+                {% else %}
+                  <span class="status status-neutral">standard</span>
+                {% endif %}
+              </td>
               <td>{{ key.active|yesno:"Active,Inactive" }}</td>
               <td class="mono">{{ key.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
               <td class="mono">{{ key.created_at|date:"Y-m-d H:i" }}</td>
             </tr>
           {% empty %}
             <tr>
-              <td colspan="7" class="muted">No API keys found.</td>
+              <td colspan="8" class="muted">No API keys found.</td>
             </tr>
           {% endfor %}
         </tbody>

@@ -17,17 +17,7 @@
 
 {% block content %}
   <div data-job-detail-page>
-    <section class="dr-auth-panel" data-api-key-panel>
-      <div class="dr-toolbar">
-        <div class="field" style="min-width: min(28rem, 100%);">
-          <label for="apiKeyInput">API key for artifact preview</label>
-          <input id="apiKeyInput" placeholder="Api-Key ..." autocomplete="off" />
-        </div>
-        <button id="saveKeyBtn" type="button" data-api-key-use>Use key</button>
-        <button class="ghost" id="clearKeyBtn" type="button" data-api-key-clear>Clear key</button>
-        <span class="muted" id="statusLine" data-api-key-status>Waiting for API key.</span>
-      </div>
-    </section>
+    {% include "dashboard/_dashboard_api_context.html" %}
 
     <section class="card" style="margin-top: 1rem;">
       <div class="card-body">
@@ -48,6 +38,58 @@
             <div class="muted">Docling</div>
             <div class="mono">{{ job.docling_version|default:"-" }}</div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top: 1rem;">
+      <div class="card-body">
+        <div class="dr-section-heading">
+          <div>
+            <h2 class="card-title">Run this document again</h2>
+            <div class="muted">Create a new job from document #{{ job.document_id }} or retry this failed job when possible.</div>
+          </div>
+          <div class="actions">
+            <button
+              type="button"
+              data-document-ingest-uuid="{{ job.document.uuid }}"
+              data-ingest-mode="create_new"
+              data-ingest-profile-source="#jobRunProfile"
+              data-ingest-options-source="#jobRunOptionsJson"
+              data-action-tenant-id="{{ job.tenant_id }}"
+              data-action-scope="documents:write"
+            >Run again</button>
+            {% if job.status == "FAILED" or job.status == "QUARANTINED" %}
+              <button
+                type="button"
+                class="ghost"
+                data-job-retry="{{ job.id }}"
+                data-action-tenant-id="{{ job.tenant_id }}"
+                data-action-scope="jobs:write"
+              >Retry job</button>
+            {% endif %}
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="jobRunProfile">Profile</label>
+            <select id="jobRunProfile">
+              <option value="" {% if not job.profile %}selected{% endif %}>No profile</option>
+              {% for profile in profiles %}
+                <option value="{{ profile.name }}" {% if profile.name == job.profile %}selected{% endif %}>{{ profile.name }} - {{ profile.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% include "dashboard/_docling_options_controls.html" with json_target="jobRunOptionsJson" profiles=profiles %}
+          <details class="collapse">
+            <summary>
+              <span class="pill">JSON fallback</span>
+              <span class="muted">Defaults to this job's current options.</span>
+            </summary>
+            <textarea id="jobRunOptionsJson">{{ options_text }}</textarea>
+          </details>
+          <div class="muted" data-job-action-status>No job action submitted.</div>
+          <pre class="metrics dr-json-preview" data-job-action-result>No job action yet.</pre>
         </div>
       </div>
     </section>
@@ -106,7 +148,13 @@
                       <td>{{ artifact.content_type|default:"-" }}</td>
                       <td class="mono">{{ artifact.checksum_sha256|slice:":16" }}...</td>
                       <td>
-                        <button type="button" class="ghost" data-artifact-preview="{{ artifact.id }}">Preview</button>
+                        <button
+                          type="button"
+                          class="ghost"
+                          data-artifact-preview="{{ artifact.id }}"
+                          data-action-tenant-id="{{ artifact.tenant_id }}"
+                          data-action-scope="artifacts:read"
+                        >Preview</button>
                       </td>
                     </tr>
                   {% empty %}

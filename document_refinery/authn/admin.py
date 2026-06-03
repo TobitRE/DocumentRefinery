@@ -16,13 +16,33 @@ class TenantAdmin(admin.ModelAdmin):
 
 @admin.register(APIKey)
 class APIKeyAdmin(admin.ModelAdmin):
-    list_display = ("name", "tenant", "prefix", "active", "created_at", "last_used_at")
-    list_filter = ("active", "tenant")
+    list_display = (
+        "name",
+        "tenant",
+        "prefix",
+        "active",
+        "is_dashboard_test_key",
+        "created_at",
+        "last_used_at",
+    )
+    list_filter = ("active", "is_dashboard_test_key", "tenant")
     search_fields = ("name", "prefix")
     readonly_fields = ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")
     actions = ("deactivate_keys", "rotate_keys")
     fieldsets = (
-        (None, {"fields": ("tenant", "name", "active", "scopes", "allowed_upload_mime_types")}),
+        (
+            None,
+            {
+                "fields": (
+                    "tenant",
+                    "name",
+                    "active",
+                    "is_dashboard_test_key",
+                    "scopes",
+                    "allowed_upload_mime_types",
+                )
+            },
+        ),
         ("Docling defaults", {"fields": ("docling_options_json",)}),
         ("Key data", {"fields": ("prefix", "key_hash", "created_at", "modified_at", "last_used_at")}),
     )
