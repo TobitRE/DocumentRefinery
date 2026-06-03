@@ -58,8 +58,10 @@ DOCLING_ARTIFACTS_PATH = os.environ.get(
 os.environ.setdefault("DOCLING_ARTIFACTS_PATH", DOCLING_ARTIFACTS_PATH)
 DOCLING_DEVICE = os.environ.get("DOCLING_DEVICE", "cpu")
 DOCLING_NUM_THREADS = int(os.environ.get("DOCLING_NUM_THREADS", "2"))
+DOCLING_ALLOWED_OCR_ENGINES = os.environ.get("DOCLING_ALLOWED_OCR_ENGINES", "auto,rapidocr")
 os.environ.setdefault("DOCLING_DEVICE", DOCLING_DEVICE)
 os.environ.setdefault("DOCLING_NUM_THREADS", str(DOCLING_NUM_THREADS))
+os.environ.setdefault("DOCLING_ALLOWED_OCR_ENGINES", DOCLING_ALLOWED_OCR_ENGINES)
 UPLOAD_MAX_SIZE_MB = int(os.environ.get("UPLOAD_MAX_SIZE_MB", "50"))
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "0"))
 DOC_DEFAULT_OPTIONS = {}

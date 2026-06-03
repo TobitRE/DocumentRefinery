@@ -6,6 +6,7 @@ import zipfile
 from enum import Enum
 from unittest.mock import patch
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -433,6 +434,20 @@ class TestPipelineTasks(TestCase):
         self.assertEqual(ocr_options["kind"], "rapidocr")
         self.assertEqual(ocr_options["lang"], ["de"])
         self.assertTrue(ocr_options["force_full_page_ocr"])
+
+    def test_profiles_pin_ocr_to_rapidocr(self):
+        for profile in ("ocr_only", "structured", "full_vlm"):
+            with self.subTest(profile=profile):
+                resolved = resolve_effective_options(self.api_key, {}, profile)
+                self.assertEqual(resolved["effective_options"]["ocr_options"]["kind"], "rapidocr")
+
+    def test_rejects_disabled_easyocr_effective_options(self):
+        with self.assertRaises(ValidationError):
+            resolve_effective_options(
+                self.api_key,
+                {"ocr_options": {"kind": "easyocr"}},
+                "ocr_only",
+            )
 
     def test_normalize_legacy_ocr_keys(self):
         normalized, warnings = normalize_docling_options(

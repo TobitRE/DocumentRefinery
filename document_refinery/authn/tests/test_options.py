@@ -1,5 +1,5 @@
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from authn.options import (
     DEFAULT_ALLOWED_UPLOAD_MIME_TYPES,
@@ -65,6 +65,13 @@ class TestDoclingOptions(TestCase):
             validate_docling_options({"ocr_engine": "unknown"})
         with self.assertRaises(ValidationError):
             validate_docling_options({"ocr_options": {"kind": "unknown"}})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"ocr_engine": "easyocr"})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"ocr_options": {"kind": "easyocr"}})
+
+        with override_settings(DOCLING_ALLOWED_OCR_ENGINES="auto,rapidocr,easyocr"):
+            validate_docling_options({"ocr_engine": "easyocr"})
 
     def test_rejects_known_unsupported_docling_features(self):
         with self.assertRaises(ValidationError):

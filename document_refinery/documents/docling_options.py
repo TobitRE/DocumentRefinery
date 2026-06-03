@@ -15,7 +15,9 @@ from .profiles import (
 
 ALLOWED_EXPORTS = ("markdown", "text", "doctags", "chunks_json", "figures_zip")
 ALWAYS_GENERATED_EXPORTS = ("docling_json",)
-OCR_ENGINES = ("auto", "rapidocr", "easyocr", "tesseract", "tesseract_cli", "mac")
+KNOWN_OCR_ENGINES = ("auto", "rapidocr", "easyocr", "tesseract", "tesseract_cli", "mac")
+DEFAULT_ALLOWED_OCR_ENGINES = ("auto", "rapidocr")
+OCR_ENGINES = KNOWN_OCR_ENGINES
 STRUCTURED_OPTION_KEYS = {
     "max_num_pages",
     "max_file_size",
@@ -56,6 +58,29 @@ DOC_OPTION_SCHEMA = (
     {"key": "images_scale", "type": "number", "minimum": 0},
     {"key": "exports", "type": "choice_list", "choices": list(ALLOWED_EXPORTS)},
 )
+
+
+def allowed_ocr_engines() -> tuple[str, ...]:
+    raw_value = getattr(settings, "DOCLING_ALLOWED_OCR_ENGINES", "") or ""
+    values = [item.strip().lower() for item in str(raw_value).split(",") if item.strip()]
+    if not values:
+        return DEFAULT_ALLOWED_OCR_ENGINES
+    allowed = [item for item in values if item in KNOWN_OCR_ENGINES]
+    return tuple(dict.fromkeys(allowed)) or DEFAULT_ALLOWED_OCR_ENGINES
+
+
+def _require_allowed_ocr_engine(key: str, value: Any) -> None:
+    if value not in KNOWN_OCR_ENGINES:
+        raise ValidationError(
+            f"{key} must be one of: " + ", ".join(KNOWN_OCR_ENGINES) + "."
+        )
+    allowed = allowed_ocr_engines()
+    if value not in allowed:
+        raise ValidationError(
+            f"{key} '{value}' is not enabled for this deployment. Enabled OCR engines: "
+            + ", ".join(allowed)
+            + "."
+        )
 
 
 def _merge_dicts(base: dict[str, Any], incoming: dict[str, Any] | None) -> dict[str, Any]:
@@ -127,20 +152,14 @@ def normalize_docling_options(options: dict | None) -> tuple[dict, list[str]]:
         elif key == "ocr_languages":
             _require_string_list(key, value)
         elif key == "ocr_engine":
-            if value not in OCR_ENGINES:
-                raise ValidationError(
-                    "ocr_engine must be one of: " + ", ".join(OCR_ENGINES) + "."
-                )
+            _require_allowed_ocr_engine("ocr_engine", value)
         elif key == "images_scale":
             _require_non_negative_number(key, value)
         elif key == "ocr_options":
             if not isinstance(value, dict):
                 raise ValidationError("ocr_options must be a JSON object.")
             kind = value.get("kind", "auto")
-            if kind not in OCR_ENGINES:
-                raise ValidationError(
-                    "ocr_options.kind must be one of: " + ", ".join(OCR_ENGINES) + "."
-                )
+            _require_allowed_ocr_engine("ocr_options.kind", kind)
             if "lang" in value:
                 _require_string_list("ocr_options.lang", value["lang"])
             if "force_full_page_ocr" in value:
@@ -242,7 +261,13 @@ def build_pdf_pipeline_options(options: dict | None):
 
 
 def option_schema() -> list[dict[str, Any]]:
-    return [dict(item) for item in DOC_OPTION_SCHEMA]
+    schema = []
+    for item in DOC_OPTION_SCHEMA:
+        row = dict(item)
+        if row.get("key") == "ocr_engine":
+            row["choices"] = list(allowed_ocr_engines())
+        schema.append(row)
+    return schema
 
 
 def capabilities_payload() -> dict[str, Any]:

@@ -405,6 +405,9 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
         "environment": {
             "DOCLING_DEVICE": str(getattr(settings, "DOCLING_DEVICE", "")),
             "DOCLING_NUM_THREADS": str(getattr(settings, "DOCLING_NUM_THREADS", "")),
+            "DOCLING_ALLOWED_OCR_ENGINES": str(
+                getattr(settings, "DOCLING_ALLOWED_OCR_ENGINES", "")
+            ),
             "HF_HOME": str(hf_home),
             "DOCLING_CACHE_DIR": str(docling_cache_dir),
             "DOCLING_ARTIFACTS_PATH": str(artifacts_path),

@@ -112,8 +112,15 @@ Pull muss `./deploy/update_document_refinery.sh` `onnxruntime>=1.20,<2` aus
 danach ab, wenn das Backend weiterhin fehlt. Fuer die Standardkonfiguration gilt:
 
 ```sh
+DOCLING_ALLOWED_OCR_ENGINES=auto,rapidocr
 DOCLING_RAPIDOCR_BACKENDS=onnxruntime
 ```
+
+`easyocr` ist nicht Teil der Standard-Produktionskonfiguration. Es wird vom
+Dashboard und von der Optionsvalidierung blockiert, solange es nicht bewusst mit
+`pip install easyocr` installiert und ueber `DOCLING_ALLOWED_OCR_ENGINES`
+freigeschaltet wurde. Fuer den aktuellen Serverpfad ist RapidOCR mit
+ONNX Runtime die abgesicherte OCR-Engine.
 
 Wenn der Smoke auf Apple Silicon oder macOS mit MPS/Torch-Fehlern scheitert, sicherstellen:
 

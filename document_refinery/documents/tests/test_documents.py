@@ -370,6 +370,8 @@ class TestDoclingMetadataAPI(TestCase):
         self.assertIn("multi_format_upload", response.data["features"]["planned"])
         self.assertIn("real_chunking", response.data["features"]["planned"])
         self.assertIn("vlm_pipeline", response.data["features"]["planned"])
+        schema = {item["key"]: item for item in response.data["options_schema"]}
+        self.assertEqual(schema["ocr_engine"]["choices"], ["auto", "rapidocr"])
 
     def test_options_resolve_merges_layers_and_warns_unknown_keys(self):
         response = self.client.post(

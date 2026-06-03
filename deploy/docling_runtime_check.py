@@ -66,6 +66,7 @@ def set_docling_runtime_defaults() -> None:
     data_root = Path(os.environ.get("DATA_ROOT", "/var/lib/docling_service"))
     os.environ.setdefault("DOCLING_DEVICE", "cpu")
     os.environ.setdefault("DOCLING_NUM_THREADS", "2")
+    os.environ.setdefault("DOCLING_ALLOWED_OCR_ENGINES", "auto,rapidocr")
     os.environ.setdefault("HF_HOME", str(data_root / "hf_cache"))
     os.environ.setdefault("DOCLING_CACHE_DIR", str(data_root / "docling_cache"))
     os.environ.setdefault("DOCLING_ARTIFACTS_PATH", str(data_root / "docling_artifacts"))
@@ -99,6 +100,7 @@ def check_environment(reporter: Reporter) -> None:
     )
     docling_device = os.environ.get("DOCLING_DEVICE")
     docling_threads = os.environ.get("DOCLING_NUM_THREADS")
+    allowed_ocr_engines = os.environ.get("DOCLING_ALLOWED_OCR_ENGINES")
     worker_concurrency = os.environ.get("CELERY_WORKER_CONCURRENCY")
     data_root_abs = data_root.resolve()
 
@@ -111,6 +113,14 @@ def check_environment(reporter: Reporter) -> None:
         reporter.ok("env:DOCLING_NUM_THREADS", docling_threads)
     else:
         reporter.warn("env:DOCLING_NUM_THREADS", "not set; recommended value is 2")
+
+    if allowed_ocr_engines:
+        reporter.ok("env:DOCLING_ALLOWED_OCR_ENGINES", allowed_ocr_engines)
+    else:
+        reporter.warn(
+            "env:DOCLING_ALLOWED_OCR_ENGINES",
+            "not set; recommended value is auto,rapidocr",
+        )
 
     if worker_concurrency:
         reporter.ok("env:CELERY_WORKER_CONCURRENCY", worker_concurrency)
