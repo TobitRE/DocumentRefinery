@@ -13,6 +13,7 @@ from typing import Any
 
 DEFAULT_DATA_ROOT = "/var/lib/docling_service"
 DEFAULT_RAPIDOCR_LANGUAGES = ("chinese", "english")
+DEFAULT_RAPIDOCR_BACKENDS = ("onnxruntime",)
 SUPPORTED_RAPIDOCR_BACKENDS = ("onnxruntime", "torch")
 
 
@@ -73,12 +74,11 @@ def detect_rapidocr_backends(value: str | None = None) -> list[str]:
             )
         return configured
 
-    backends: list[str] = []
-    if importlib.util.find_spec("onnxruntime") is not None:
-        backends.append("onnxruntime")
-    if importlib.util.find_spec("torch") is not None:
-        backends.append("torch")
-    return backends
+    return [
+        backend
+        for backend in DEFAULT_RAPIDOCR_BACKENDS
+        if importlib.util.find_spec(backend) is not None
+    ]
 
 
 def rapidocr_languages(value: str | None = None) -> list[str]:
@@ -338,9 +338,10 @@ def main() -> int:
                 check_only=args.check_only,
             )
         else:
-            payload["rapidocr"]["status"] = "warn"
+            payload["rapidocr"]["status"] = "fail"
             payload["rapidocr"]["message"] = (
-                "No supported RapidOCR backend is importable; skipping RapidOCR model warmup."
+                "No default RapidOCR backend is importable. Install onnxruntime or set "
+                "DOCLING_RAPIDOCR_BACKENDS to an explicitly supported backend."
             )
     except Exception as exc:
         payload["rapidocr"] = {

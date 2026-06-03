@@ -216,7 +216,13 @@ def check_rapidocr_models(reporter: Reporter) -> None:
         backends = detect_rapidocr_backends()
         languages = rapidocr_languages()
         if not backends:
-            reporter.warn("rapidocr:artifacts", "no supported RapidOCR backend importable")
+            reporter.fail(
+                "rapidocr:backend",
+                (
+                    "no default RapidOCR backend importable; install onnxruntime or set "
+                    "DOCLING_RAPIDOCR_BACKENDS to an explicitly supported backend"
+                ),
+            )
             return
         expected = expected_rapidocr_model_paths(
             paths["docling_artifacts_path"],
@@ -340,6 +346,7 @@ def main() -> int:
     check_package(reporter, "redis", "7.x", lambda value: value.startswith("7."))
     check_package(reporter, "docling", "2.96.1", lambda value: value == "2.96.1")
     check_package(reporter, "docling-slim", "2.96.1", lambda value: value == "2.96.1")
+    check_package(reporter, "onnxruntime", "installed", lambda _value: True)
     check_environment(reporter)
     check_imports(reporter)
     if args.check_models:

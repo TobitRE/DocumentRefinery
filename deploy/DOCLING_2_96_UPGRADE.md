@@ -105,6 +105,16 @@ RapidOCR darf nicht versuchen, nach
 `Read-only file system`-Fehler erscheint, ist der Artefaktpfad nicht gesetzt, nicht
 beschreibbar, oder der OCR-Warmup wurde nicht erfolgreich ausgefuehrt.
 
+Wenn der Smoke oder ein Job mit `ImportError: onnxruntime is not installed`
+scheitert, ist die RapidOCR-Engine-Dependency im venv unvollstaendig. Nach dem
+Pull muss `./deploy/update_document_refinery.sh` `onnxruntime>=1.20,<2` aus
+`requirements.txt` installieren. Der Runtime-Check und der Model-Warmup brechen
+danach ab, wenn das Backend weiterhin fehlt. Fuer die Standardkonfiguration gilt:
+
+```sh
+DOCLING_RAPIDOCR_BACKENDS=onnxruntime
+```
+
 Wenn der Smoke auf Apple Silicon oder macOS mit MPS/Torch-Fehlern scheitert, sicherstellen:
 
 ```sh

@@ -196,16 +196,32 @@ def _rapidocr_artifact_check(artifacts_path: Path) -> dict[str, Any]:
             "path": str(artifacts_path),
         }
 
-    backends = []
-    if importlib.util.find_spec("onnxruntime") is not None:
-        backends.append("onnxruntime")
-    if importlib.util.find_spec("torch") is not None:
-        backends.append("torch")
+    configured_backends = [
+        item.strip().lower()
+        for item in os.environ.get("DOCLING_RAPIDOCR_BACKENDS", "onnxruntime").split(",")
+        if item.strip()
+    ]
+    supported_backends = {"onnxruntime", "torch"}
+    unsupported_backends = sorted(set(configured_backends) - supported_backends)
+    if unsupported_backends:
+        return {
+            "label": "RapidOCR artifacts",
+            "status": "fail",
+            "message": "unsupported backend(s): " + ", ".join(unsupported_backends),
+            "path": str(artifacts_path),
+        }
+
+    backends = [
+        backend
+        for backend in configured_backends
+        if importlib.util.find_spec(backend) is not None
+    ]
     if not backends:
         return {
             "label": "RapidOCR artifacts",
-            "status": "warn",
-            "message": "no supported RapidOCR backend is importable",
+            "status": "fail",
+            "message": "configured RapidOCR backend is not importable: "
+            + ", ".join(configured_backends or ["onnxruntime"]),
             "path": str(artifacts_path),
         }
 
@@ -384,6 +400,7 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
             _status_package("docling", "2.96.1", lambda value: value == "2.96.1"),
             _status_package("docling-core", "installed"),
             _status_package("docling-parse", "installed"),
+            _status_package("onnxruntime", "installed"),
         ],
         "environment": {
             "DOCLING_DEVICE": str(getattr(settings, "DOCLING_DEVICE", "")),
@@ -424,6 +441,7 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
         "ocr_backends": {
             "docling_base_artifacts": _docling_base_artifact_check(artifacts_path),
             "rapidocr": _import_check("RapidOCR", "rapidocr"),
+            "onnxruntime": _import_check("ONNX Runtime", "onnxruntime"),
             "rapidocr_artifacts": _rapidocr_artifact_check(artifacts_path),
             "easyocr": _import_check("EasyOCR", "easyocr"),
             "easyocr_artifacts": _easyocr_artifact_check(artifacts_path),
