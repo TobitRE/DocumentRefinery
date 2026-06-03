@@ -678,7 +678,7 @@
     } catch (err) {
       const table = qs("[data-documents-table]", page);
       if (table) {
-        table.innerHTML = `<tr><td colspan="5" class="text-muted">${err.message}</td></tr>`;
+        table.innerHTML = `<tr><td colspan="6" class="text-muted">${err.message}</td></tr>`;
       }
     }
   }
