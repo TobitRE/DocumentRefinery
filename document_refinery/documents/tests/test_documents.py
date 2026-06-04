@@ -12,7 +12,14 @@ from rest_framework.test import APIClient
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from authn.models import APIKey, Tenant
-from documents.formats import DOCX, PPTX, XLSX
+from documents.formats import (
+    DOCX,
+    OOXML_MAX_COMPRESSION_RATIO,
+    OOXML_MAX_ZIP_ENTRIES,
+    OOXML_ZIP_SAFETY_MESSAGE,
+    PPTX,
+    XLSX,
+)
 from documents.models import Document, IngestionJob, IngestionJobStatus, IngestionStage
 
 
@@ -40,6 +47,28 @@ class TestDocumentUpload(TestCase):
             archive.writestr("[Content_Types].xml", "<Types></Types>")
             archive.writestr("_rels/.rels", "<Relationships></Relationships>")
             archive.writestr(required_member, "<root>Hello</root>")
+        return buffer.getvalue()
+
+    def _compressed_ooxml_bomb_bytes(self, required_member: str) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("[Content_Types].xml", "<Types></Types>")
+            archive.writestr("_rels/.rels", "<Relationships></Relationships>")
+            archive.writestr(required_member, "<root>Hello</root>")
+            archive.writestr(
+                "word/repeated.xml",
+                b"a" * (OOXML_MAX_COMPRESSION_RATIO * 4096),
+            )
+        return buffer.getvalue()
+
+    def _many_entry_ooxml_bytes(self, required_member: str) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr("[Content_Types].xml", "<Types></Types>")
+            archive.writestr("_rels/.rels", "<Relationships></Relationships>")
+            archive.writestr(required_member, "<root>Hello</root>")
+            for index in range(OOXML_MAX_ZIP_ENTRIES + 1):
+                archive.writestr(f"word/empty-{index}.xml", b"")
         return buffer.getvalue()
 
     def test_upload_writes_file_and_hash(self):
@@ -98,6 +127,42 @@ class TestDocumentUpload(TestCase):
             response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
             self.assertEqual(response.status_code, 415)
             self.assertEqual(response.data["error_code"], "INVALID_DOCUMENT")
+
+    def test_upload_rejects_compressed_office_open_xml_zip_bomb(self):
+        content = self._compressed_ooxml_bomb_bytes("word/document.xml")
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile(
+                "sample.docx",
+                content,
+                content_type=DOCX.primary_mime_type,
+            )
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
+            self.assertEqual(response.status_code, 415)
+            self.assertEqual(response.data["error_code"], "INVALID_DOCUMENT")
+            self.assertEqual(response.data["message"], OOXML_ZIP_SAFETY_MESSAGE)
+            self.assertFalse(Document.objects.exists())
+
+    def test_upload_rejects_too_many_ooxml_entries_before_zipfile_parse(self):
+        content = self._many_entry_ooxml_bytes("word/document.xml")
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile(
+                "sample.docx",
+                content,
+                content_type=DOCX.primary_mime_type,
+            )
+            with patch(
+                "documents.formats.zipfile.ZipFile",
+                side_effect=AssertionError("ZipFile should not parse this archive"),
+            ):
+                response = self.client.post(
+                    "/v1/documents/", {"file": upload}, format="multipart"
+                )
+            self.assertEqual(response.status_code, 415)
+            self.assertEqual(response.data["error_code"], "INVALID_DOCUMENT")
+            self.assertEqual(response.data["message"], OOXML_ZIP_SAFETY_MESSAGE)
+            self.assertFalse(Document.objects.exists())
 
     def test_upload_rejects_large_file(self):
         content = b"%PDF-1.4\n" + (b"x" * (1024 * 1024))
@@ -344,6 +409,37 @@ class TestDocumentUpload(TestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.data["error_code"], "INVALID_OPTIONS")
+
+    def test_office_ingest_accepts_disabled_pdf_only_api_key_defaults(self):
+        api_key = APIKey.objects.get(tenant=self.tenant)
+        api_key.docling_options_json = {
+            "do_ocr": False,
+            "do_table_structure": False,
+            "ocr_engine": "rapidocr",
+        }
+        api_key.save(update_fields=["docling_options_json"])
+        content = self._ooxml_bytes("word/document.xml")
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile(
+                "sample.docx",
+                content,
+                content_type=DOCX.primary_mime_type,
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start:
+                response = self.client.post(
+                    "/v1/documents/",
+                    {"file": upload, "ingest": "true"},
+                    format="multipart",
+                )
+            self.assertEqual(response.status_code, 201)
+            doc = Document.objects.get(pk=response.data["id"])
+            job = doc.jobs.first()
+            self.assertIsNotNone(job)
+            self.assertFalse(job.options_json["do_ocr"])
+            self.assertFalse(job.options_json["do_table_structure"])
+            self.assertEqual(job.options_json["ocr_options"]["kind"], "rapidocr")
+            start.assert_called_once()
 
     def test_upload_profile_overrides_exports(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"

@@ -531,19 +531,19 @@ def create_document_for_api_key(
             },
             status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         )
-    signature_error = validate_uploaded_file_signature(uploaded, document_format)
-    if signature_error:
-        error_code, message = signature_error
-        return Response(
-            {"error_code": error_code, "message": message},
-            status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-        )
 
     max_bytes = settings.UPLOAD_MAX_SIZE_MB * 1024 * 1024
     if uploaded.size and uploaded.size > max_bytes:
         return Response(
             {"error_code": "FILE_TOO_LARGE", "message": "File exceeds size limit."},
             status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+    signature_error = validate_uploaded_file_signature(uploaded, document_format)
+    if signature_error:
+        error_code, message = signature_error
+        return Response(
+            {"error_code": error_code, "message": message},
+            status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         )
 
     tenant_id = api_key.tenant_id

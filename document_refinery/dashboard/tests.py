@@ -502,6 +502,22 @@ class TestDashboardWebViews(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Expecting property name", response.content.decode("utf-8"))
 
+    def test_api_key_new_invalid_upload_mime_type_does_not_show_raw_key(self):
+        response = self.client.post(
+            "/dashboard/api-keys/new/",
+            {
+                "tenant": self.tenant.id,
+                "name": "BadMime",
+                "allowed_upload_mime_types": "image/png",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Unsupported upload MIME types", content)
+        self.assertNotIn("New key created", content)
+        self.assertNotIn('id="rawKeyValue"', content)
+        self.assertFalse(APIKey.objects.filter(name="BadMime").exists())
+
     def test_webhook_new_requires_key(self):
         tenant = Tenant.objects.create(name="Empty", slug="empty")
         response = self.client.post(

@@ -1060,10 +1060,10 @@ def api_key_new(request):
             try:
                 tenant = Tenant.objects.get(pk=tenant_id)
                 docling_options = _parse_json(options_raw)
-                raw_key, prefix, key_hash = APIKey.generate_key()
                 allowed_upload_mime_types = validate_allowed_upload_mime_types(
                     allowed_upload_mime_types
                 )
+                raw_key, prefix, key_hash = APIKey.generate_key()
                 APIKey.objects.create(
                     tenant=tenant,
                     name=name,

@@ -48,6 +48,14 @@ PDF_ONLY_OPTION_KEYS = PIPELINE_OPTION_KEYS | {
     "ocr_languages",
     "force_full_page_ocr",
 }
+PDF_ONLY_BOOLEAN_FEATURE_KEYS = {
+    "do_ocr",
+    "ocr",
+    "do_table_structure",
+    "generate_parsed_pages",
+    "generate_picture_images",
+    "force_full_page_ocr",
+}
 UNSUPPORTED_DOC_OPTION_KEYS = {
     "do_picture_description": "Picture description is not supported yet.",
     "do_picture_classification": "Picture classification is not supported yet.",
@@ -201,6 +209,23 @@ def validate_docling_options_payload(options: dict | None) -> None:
     normalize_docling_options(options)
 
 
+def _pdf_only_option_is_active(key: str, value: Any, normalized: dict) -> bool:
+    if key in PDF_ONLY_BOOLEAN_FEATURE_KEYS:
+        return bool(value)
+    if key == "ocr_options":
+        if isinstance(value, dict) and value.get("force_full_page_ocr"):
+            return True
+        return bool(normalized.get("do_ocr") or normalized.get("ocr"))
+    if key in {"ocr_engine", "ocr_languages"}:
+        return bool(normalized.get("do_ocr") or normalized.get("ocr"))
+    if key == "images_scale":
+        return bool(
+            normalized.get("generate_parsed_pages")
+            or normalized.get("generate_picture_images")
+        )
+    return bool(value)
+
+
 def validate_docling_options_for_input_format(
     options: dict | None, input_format: str, profile: str | None = None
 ) -> None:
@@ -210,7 +235,12 @@ def validate_docling_options_for_input_format(
     if profile:
         raise ValidationError("Docling profiles are currently supported for PDF inputs only.")
     normalized, _warnings = normalize_docling_options(options)
-    incompatible = sorted(key for key in normalized if key in PDF_ONLY_OPTION_KEYS)
+    incompatible = sorted(
+        key
+        for key, value in normalized.items()
+        if key in PDF_ONLY_OPTION_KEYS
+        and _pdf_only_option_is_active(key, value, normalized)
+    )
     if incompatible:
         raise ValidationError(
             "PDF-only Docling options are not supported for "

@@ -17,6 +17,7 @@ from documents.docling_options import (
     build_pdf_pipeline_options,
     normalize_docling_options,
     resolve_effective_options,
+    validate_docling_options_for_input_format,
 )
 from documents.profiles import PROFILE_NAMES, build_profile_pipeline_options
 from documents.tasks import (
@@ -560,6 +561,41 @@ class TestPipelineTasks(TestCase):
         self.assertEqual(normalized["ocr_options"]["lang"], ["en"])
         self.assertEqual(normalized["ocr_options"]["kind"], "rapidocr")
         self.assertTrue(any("ocr" in warning for warning in warnings))
+
+    def test_office_input_allows_disabled_pdf_only_defaults(self):
+        validate_docling_options_for_input_format(
+            {
+                "do_ocr": False,
+                "do_table_structure": False,
+                "generate_parsed_pages": False,
+                "generate_picture_images": False,
+                "force_full_page_ocr": False,
+                "ocr_engine": "rapidocr",
+                "ocr_languages": ["de"],
+                "ocr_options": {
+                    "kind": "rapidocr",
+                    "lang": ["de"],
+                    "force_full_page_ocr": False,
+                },
+                "images_scale": 2.0,
+            },
+            "docx",
+        )
+
+    def test_office_input_rejects_active_pdf_only_options(self):
+        with self.assertRaises(ValidationError) as ctx:
+            validate_docling_options_for_input_format(
+                {
+                    "do_ocr": True,
+                    "do_table_structure": True,
+                    "ocr_engine": "rapidocr",
+                },
+                "docx",
+            )
+        message = str(ctx.exception)
+        self.assertIn("do_ocr", message)
+        self.assertIn("do_table_structure", message)
+        self.assertIn("ocr_engine", message)
 
     def test_build_pdf_pipeline_options_from_effective_options(self):
         pipeline_options = build_pdf_pipeline_options(

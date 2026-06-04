@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+import struct
 import zipfile
 from dataclasses import dataclass
+
+OOXML_MAX_ZIP_ENTRIES = 10_000
+OOXML_MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
+OOXML_MAX_ENTRY_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+OOXML_MAX_TOTAL_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+OOXML_MAX_COMPRESSION_RATIO = 200
+OOXML_ZIP_SAFETY_MESSAGE = "Office document ZIP metadata exceeds safety limits."
+_ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
+_ZIP_EOCD_MIN_SIZE = 22
+_ZIP_EOCD_MAX_COMMENT_SIZE = 65_535
+_ZIP64_SENTINEL_SHORT = 0xFFFF
+_ZIP64_SENTINEL_LONG = 0xFFFFFFFF
 
 
 @dataclass(frozen=True)
@@ -130,7 +143,107 @@ def _restore_position(uploaded, position) -> None:
         pass
 
 
-def validate_uploaded_file_signature(uploaded, document_format: DocumentFormat) -> tuple[str, str] | None:
+def _file_size(uploaded) -> int | None:
+    position = _remember_position(uploaded)
+    try:
+        uploaded.seek(0, 2)
+        return uploaded.tell()
+    except Exception:
+        return None
+    finally:
+        _restore_position(uploaded, position)
+
+
+def _read_zip_tail(uploaded, file_size: int) -> bytes | None:
+    position = _remember_position(uploaded)
+    try:
+        read_size = min(
+            file_size,
+            _ZIP_EOCD_MIN_SIZE + _ZIP_EOCD_MAX_COMMENT_SIZE,
+        )
+        uploaded.seek(file_size - read_size)
+        data = uploaded.read(read_size)
+        return data if isinstance(data, bytes) else None
+    except Exception:
+        return None
+    finally:
+        _restore_position(uploaded, position)
+
+
+def _ooxml_zip_preflight_error(uploaded, invalid_message: str) -> str | None:
+    file_size = _file_size(uploaded)
+    if file_size is None or file_size < _ZIP_EOCD_MIN_SIZE:
+        return invalid_message
+
+    tail = _read_zip_tail(uploaded, file_size)
+    if tail is None:
+        return invalid_message
+
+    eocd_index = tail.rfind(_ZIP_EOCD_SIGNATURE)
+    if eocd_index < 0 or len(tail) - eocd_index < _ZIP_EOCD_MIN_SIZE:
+        return invalid_message
+
+    (
+        _signature,
+        disk_number,
+        central_directory_disk,
+        entries_this_disk,
+        entries_total,
+        central_directory_size,
+        central_directory_offset,
+        _comment_size,
+    ) = struct.unpack_from("<4s4H2LH", tail, eocd_index)
+
+    if (
+        disk_number
+        or central_directory_disk
+        or entries_this_disk != entries_total
+        or central_directory_offset + central_directory_size > file_size
+    ):
+        return invalid_message
+
+    if (
+        entries_total == _ZIP64_SENTINEL_SHORT
+        or central_directory_size == _ZIP64_SENTINEL_LONG
+        or central_directory_offset == _ZIP64_SENTINEL_LONG
+        or entries_total > OOXML_MAX_ZIP_ENTRIES
+        or central_directory_size > OOXML_MAX_CENTRAL_DIRECTORY_BYTES
+    ):
+        return OOXML_ZIP_SAFETY_MESSAGE
+
+    return None
+
+
+def _ooxml_zip_metadata_error(infos: list[zipfile.ZipInfo]) -> str | None:
+    if len(infos) > OOXML_MAX_ZIP_ENTRIES:
+        return OOXML_ZIP_SAFETY_MESSAGE
+
+    total_uncompressed = 0
+    total_compressed = 0
+    for info in infos:
+        uncompressed = max(int(info.file_size or 0), 0)
+        compressed = max(int(info.compress_size or 0), 0)
+        if uncompressed > OOXML_MAX_ENTRY_UNCOMPRESSED_BYTES:
+            return OOXML_ZIP_SAFETY_MESSAGE
+        total_uncompressed += uncompressed
+        total_compressed += compressed
+
+    if total_uncompressed > OOXML_MAX_TOTAL_UNCOMPRESSED_BYTES:
+        return OOXML_ZIP_SAFETY_MESSAGE
+    if total_uncompressed and not total_compressed:
+        return OOXML_ZIP_SAFETY_MESSAGE
+    if (
+        total_compressed
+        and total_uncompressed / total_compressed > OOXML_MAX_COMPRESSION_RATIO
+    ):
+        return OOXML_ZIP_SAFETY_MESSAGE
+
+    return None
+
+
+def validate_uploaded_file_signature(
+    uploaded, document_format: DocumentFormat
+) -> tuple[str, str] | None:
     position = _remember_position(uploaded)
     try:
         if document_format.key == PDF.key:
@@ -143,9 +256,19 @@ def validate_uploaded_file_signature(uploaded, document_format: DocumentFormat) 
                 return document_format.invalid_error_code, document_format.invalid_message
 
         if document_format.required_zip_members:
+            preflight_error = _ooxml_zip_preflight_error(
+                uploaded,
+                document_format.invalid_message,
+            )
+            if preflight_error:
+                return document_format.invalid_error_code, preflight_error
             try:
                 with zipfile.ZipFile(uploaded, "r") as archive:
-                    names = set(archive.namelist())
+                    infos = archive.infolist()
+                    metadata_error = _ooxml_zip_metadata_error(infos)
+                    if metadata_error:
+                        return document_format.invalid_error_code, metadata_error
+                    names = {info.filename for info in infos}
             except (OSError, zipfile.BadZipFile):
                 return document_format.invalid_error_code, document_format.invalid_message
             missing = [
