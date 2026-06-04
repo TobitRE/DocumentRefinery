@@ -6,6 +6,7 @@ from authn.options import (
     validate_allowed_upload_mime_types,
     validate_docling_options,
 )
+from documents.formats import DOCX
 
 
 class TestDoclingOptions(TestCase):
@@ -103,9 +104,17 @@ class TestAllowedUploadMimeTypes(TestCase):
 
     def test_normalizes_and_deduplicates(self):
         result = validate_allowed_upload_mime_types(
-            [" Application/PDF ", "application/x-pdf", "application/pdf"]
+            [
+                " Application/PDF ",
+                "application/x-pdf",
+                "application/pdf",
+                f" {DOCX.primary_mime_type.upper()} ",
+            ]
         )
-        self.assertEqual(result, ["application/pdf", "application/x-pdf"])
+        self.assertEqual(
+            result,
+            ["application/pdf", "application/x-pdf", DOCX.primary_mime_type],
+        )
 
     def test_rejects_unsupported_types(self):
         with self.assertRaises(ValidationError):

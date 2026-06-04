@@ -38,6 +38,12 @@ from .docling_options import (
     normalize_docling_options,
     profile_catalog,
     resolve_effective_options,
+    validate_docling_options_for_input_format,
+)
+from .formats import (
+    extension_for_mime_type,
+    format_for_mime_type,
+    validate_uploaded_file_signature,
 )
 from .serializers import (
     ArtifactSerializer,
@@ -64,15 +70,6 @@ def _scope_denied_response() -> Response:
         {"error_code": "INSUFFICIENT_SCOPE", "message": "API key scope is insufficient."},
         status=status.HTTP_403_FORBIDDEN,
     )
-
-
-def _looks_like_pdf(uploaded) -> bool:
-    try:
-        header = uploaded.read(5)
-        uploaded.seek(0)
-    except Exception:
-        return False
-    return header == b"%PDF-"
 
 
 def _safe_remove_file(path: str) -> None:
@@ -153,9 +150,14 @@ def _duplicate_document_response(document: Document, request, duplicate_policy: 
     return response
 
 
-def _build_ingestion_options(api_key, options_json, profile: str | None) -> dict:
+def _build_ingestion_options(
+    api_key, options_json, profile: str | None, input_format: str = "pdf"
+) -> dict:
     resolved = resolve_effective_options(api_key, options_json, profile)
     validate_docling_options(resolved["effective_options"])
+    validate_docling_options_for_input_format(
+        resolved["effective_options"], input_format, profile
+    )
     return resolved["effective_options"] or {}
 
 
@@ -181,11 +183,12 @@ def _copy_document_source_for_job(document: Document) -> tuple[str, str] | None:
     source_abs = _resolve_document_source_abs(document)
     if not source_abs:
         return None
+    extension = extension_for_mime_type(document.mime_type)
     relpath = os.path.join(
         "uploads",
         "quarantine",
         str(document.tenant_id),
-        f"{document.uuid}-{uuid.uuid4()}.pdf",
+        f"{document.uuid}-{uuid.uuid4()}{extension}",
     )
     abs_path = os.path.join(settings.DATA_ROOT, relpath)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -519,9 +522,20 @@ def create_document_for_api_key(
             },
             status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         )
-    if content_type in ("application/pdf", "application/x-pdf") and not _looks_like_pdf(uploaded):
+    document_format = format_for_mime_type(content_type)
+    if not document_format:
         return Response(
-            {"error_code": "INVALID_PDF", "message": "File does not look like a PDF."},
+            {
+                "error_code": "UNSUPPORTED_MEDIA_TYPE",
+                "message": "File type is not supported by this service.",
+            },
+            status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+    signature_error = validate_uploaded_file_signature(uploaded, document_format)
+    if signature_error:
+        error_code, message = signature_error
+        return Response(
+            {"error_code": error_code, "message": message},
             status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         )
 
@@ -542,11 +556,16 @@ def create_document_for_api_key(
         created_by_user=created_by_user,
         external_uuid=external_uuid,
         original_filename=filename,
-        mime_type=content_type or "application/pdf",
+        mime_type=content_type or document_format.primary_mime_type,
         size_bytes=0,
         storage_relpath_quarantine="",
     )
-    relpath = os.path.join("uploads", "quarantine", str(tenant_id), f"{doc.uuid}.pdf")
+    relpath = os.path.join(
+        "uploads",
+        "quarantine",
+        str(tenant_id),
+        f"{doc.uuid}{document_format.primary_extension}",
+    )
     abs_path = os.path.join(settings.DATA_ROOT, relpath)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
@@ -589,7 +608,9 @@ def create_document_for_api_key(
     job_id = None
     if ingest:
         try:
-            options_json = _build_ingestion_options(api_key, options_json, profile)
+            options_json = _build_ingestion_options(
+                api_key, options_json, profile, document_format.key
+            )
         except ValidationError as exc:
             quarantine_path = doc.get_quarantine_path()
             if quarantine_path and os.path.exists(quarantine_path):
@@ -646,10 +667,13 @@ def ingest_document_for_api_key(
     if mode == "retry_failed" and not _has_any_scope(api_key, {"jobs:write"}):
         return _scope_denied_response()
     try:
+        document_format = format_for_mime_type(document.mime_type)
+        input_format = document_format.key if document_format else ""
         options_json = _build_ingestion_options(
             api_key,
             serializer.validated_data.get("options_json", None),
             profile,
+            input_format,
         )
     except ValidationError as exc:
         message = "; ".join(exc.messages) if getattr(exc, "messages", None) else str(exc)
@@ -763,6 +787,12 @@ def retry_job_for_api_key(api_key, job_id, *, dashboard_action_user=None) -> Res
         return Response(status=status.HTTP_404_NOT_FOUND)
     try:
         validate_docling_options(job.options_json or {})
+        document_format = format_for_mime_type(job.document.mime_type)
+        validate_docling_options_for_input_format(
+            job.options_json or {},
+            document_format.key if document_format else "",
+            job.profile,
+        )
     except ValidationError as exc:
         return _invalid_options_response(exc)
     if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
@@ -793,6 +823,15 @@ def compare_document_for_api_key(
     document = Document.objects.filter(tenant=api_key.tenant, pk=document_id).first()
     if not document:
         return Response(status=status.HTTP_404_NOT_FOUND)
+    document_format = format_for_mime_type(document.mime_type)
+    if document_format and document_format.key != "pdf":
+        return Response(
+            {
+                "error_code": "INVALID_OPTIONS",
+                "message": "Profile comparison is currently supported for PDF inputs only.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     serializer = DocumentCompareSerializer(data=data)
     serializer.is_valid(raise_exception=True)
     profiles = serializer.validated_data["profiles"]
@@ -830,7 +869,7 @@ def compare_document_for_api_key(
             "uploads",
             "quarantine",
             str(document.tenant_id),
-            f"{document.uuid}-{uuid.uuid4()}.pdf",
+            f"{document.uuid}-{uuid.uuid4()}{extension_for_mime_type(document.mime_type)}",
         )
         abs_path = os.path.join(settings.DATA_ROOT, relpath)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)

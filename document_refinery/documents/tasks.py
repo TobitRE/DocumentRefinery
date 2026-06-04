@@ -36,7 +36,12 @@ from .models import (
     WebhookDeliveryStatus,
     WebhookEndpoint,
 )
-from .docling_options import build_pdf_pipeline_options, validate_docling_options_payload
+from .docling_options import (
+    build_pdf_pipeline_options,
+    validate_docling_options_for_input_format,
+    validate_docling_options_payload,
+)
+from .formats import extension_for_mime_type, format_for_mime_type
 from .profiles import build_profile_pipeline_options
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
@@ -44,21 +49,44 @@ DOCLING_UNLIMITED = 9223372036854775807
 
 DocumentConverter = None
 PdfFormatOption = None
+WordFormatOption = None
+PowerpointFormatOption = None
+ExcelFormatOption = None
 InputFormat = None
 
 
 def _load_docling_converter():
-    global DocumentConverter, PdfFormatOption, InputFormat
-    if DocumentConverter is None or PdfFormatOption is None or InputFormat is None:
+    global DocumentConverter, PdfFormatOption, WordFormatOption
+    global PowerpointFormatOption, ExcelFormatOption, InputFormat
+    if (
+        DocumentConverter is None
+        or PdfFormatOption is None
+        or WordFormatOption is None
+        or PowerpointFormatOption is None
+        or ExcelFormatOption is None
+        or InputFormat is None
+    ):
         converter_module = import_module("docling.document_converter")
         base_models_module = import_module("docling.datamodel.base_models")
         if DocumentConverter is None:
             DocumentConverter = converter_module.DocumentConverter
         if PdfFormatOption is None:
             PdfFormatOption = converter_module.PdfFormatOption
+        if WordFormatOption is None:
+            WordFormatOption = converter_module.WordFormatOption
+        if PowerpointFormatOption is None:
+            PowerpointFormatOption = converter_module.PowerpointFormatOption
+        if ExcelFormatOption is None:
+            ExcelFormatOption = converter_module.ExcelFormatOption
         if InputFormat is None:
             InputFormat = base_models_module.InputFormat
-    return DocumentConverter, PdfFormatOption, InputFormat
+    format_option_classes = {
+        "pdf": PdfFormatOption,
+        "docx": WordFormatOption,
+        "pptx": PowerpointFormatOption,
+        "xlsx": ExcelFormatOption,
+    }
+    return DocumentConverter, format_option_classes, InputFormat
 
 
 def _webhook_max_attempts() -> int:
@@ -75,7 +103,7 @@ def _webhook_request_timeout() -> int:
 
 def start_ingestion_pipeline(job_id: int):
     result = chain(
-        scan_pdf_task.s(job_id),
+        scan_document_task.s(job_id),
         docling_convert_task.s(),
         export_artifacts_task.s(),
         finalize_job_task.s(),
@@ -374,7 +402,10 @@ def scan_pdf_task(self, job_id: int) -> int:
         raise RuntimeError("Virus scan error")
 
     clean_relpath = os.path.join(
-        "uploads", "clean", str(job.tenant_id), f"{document.uuid}.pdf"
+        "uploads",
+        "clean",
+        str(job.tenant_id),
+        f"{document.uuid}{extension_for_mime_type(document.mime_type)}",
     )
     clean_abspath = os.path.join(settings.DATA_ROOT, clean_relpath)
     os.makedirs(os.path.dirname(clean_abspath), exist_ok=True)
@@ -387,6 +418,9 @@ def scan_pdf_task(self, job_id: int) -> int:
     job.scan_ms = int((time.monotonic() - start) * 1000)
     job.save()
     return job_id
+
+
+scan_document_task = scan_pdf_task
 
 
 @shared_task(bind=True)
@@ -417,6 +451,12 @@ def docling_convert_task(self, job_id: int) -> int:
 
     try:
         validate_docling_options_payload(job.options_json or {})
+        document_format = format_for_mime_type(document.mime_type)
+        if not document_format:
+            raise ValidationError("Document input format is not supported.")
+        validate_docling_options_for_input_format(
+            job.options_json or {}, document_format.key, job.profile
+        )
     except ValidationError as exc:
         _mark_failed(
             job,
@@ -427,18 +467,23 @@ def docling_convert_task(self, job_id: int) -> int:
         return job_id
 
     try:
-        document_converter, pdf_format_option, input_format = _load_docling_converter()
-        pipeline_options = build_pdf_pipeline_options(job.options_json or {})
-        if not pipeline_options:
-            pipeline_options = build_profile_pipeline_options(job.profile)
-        if pipeline_options:
-            converter = document_converter(
-                format_options={
-                    input_format.PDF: pdf_format_option(pipeline_options=pipeline_options)
-                }
-            )
+        document_converter, format_option_classes, input_format = _load_docling_converter()
+        docling_format = getattr(input_format, document_format.docling_input_format)
+        format_options = {}
+        if document_format.key == "pdf":
+            pipeline_options = build_pdf_pipeline_options(job.options_json or {})
+            if not pipeline_options:
+                pipeline_options = build_profile_pipeline_options(job.profile)
+            if pipeline_options:
+                format_options[docling_format] = format_option_classes["pdf"](
+                    pipeline_options=pipeline_options
+                )
         else:
-            converter = document_converter()
+            format_options[docling_format] = format_option_classes[document_format.key]()
+        converter = document_converter(
+            allowed_formats=[docling_format],
+            format_options=format_options or None,
+        )
         result = converter.convert(
             document.get_clean_path(),
             max_num_pages=max_pages,

@@ -13,6 +13,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from authn.models import APIKey, Tenant
+from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
 from dashboard.models import DashboardActionAudit
 from dashboard import web_views
 from dashboard.runtime import (
@@ -266,7 +267,7 @@ class TestDashboardWebViews(TestCase):
 
         checks = [
             ("/dashboard/tools/", "Dashboard tools"),
-            ("/dashboard/upload/", "PDF upload"),
+            ("/dashboard/upload/", "Document upload"),
             ("/dashboard/jobs/", "Ingestion jobs"),
             (f"/dashboard/jobs/{job.id}/", "Job #"),
             ("/dashboard/compare/", "Compare Docling profiles"),
@@ -370,7 +371,10 @@ class TestDashboardWebViews(TestCase):
             content,
         )
         self.assertIn('name="allowed_upload_mime_types"', content)
-        self.assertIn('value="application/pdf, application/x-pdf"', content)
+        self.assertIn(
+            f'value="{", ".join(DEFAULT_ALLOWED_UPLOAD_MIME_TYPES)}"',
+            content,
+        )
         self.assertIn('name="scope_choices"', content)
         self.assertIn("Structured Docling controls", content)
         self.assertIn("JSON fallback", content)

@@ -24,7 +24,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from authn.models import APIKey, Tenant
 from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
-from authn.options import validate_docling_options
+from authn.options import validate_allowed_upload_mime_types, validate_docling_options
 from .models import DashboardActionAudit
 from .runtime import runtime_diagnostics_payload, run_runtime_smoke
 from documents.docling_options import (
@@ -626,6 +626,8 @@ def _api_key_payload(key: APIKey) -> dict[str, object]:
         "scopes": key.scopes or [],
         "active": key.active,
         "is_dashboard_test_key": key.is_dashboard_test_key,
+        "allowed_upload_mime_types": key.allowed_upload_mime_types
+        or list(DEFAULT_ALLOWED_UPLOAD_MIME_TYPES),
         "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
         "created_at": key.created_at.isoformat() if key.created_at else None,
     }
@@ -1059,6 +1061,9 @@ def api_key_new(request):
                 tenant = Tenant.objects.get(pk=tenant_id)
                 docling_options = _parse_json(options_raw)
                 raw_key, prefix, key_hash = APIKey.generate_key()
+                allowed_upload_mime_types = validate_allowed_upload_mime_types(
+                    allowed_upload_mime_types
+                )
                 APIKey.objects.create(
                     tenant=tenant,
                     name=name,
@@ -1133,7 +1138,9 @@ def api_key_detail(request, pk: int):
                 key.active = active
                 key.is_dashboard_test_key = is_dashboard_test_key
                 key.docling_options_json = _parse_json(options_raw)
-                key.allowed_upload_mime_types = allowed_upload_mime_types
+                key.allowed_upload_mime_types = validate_allowed_upload_mime_types(
+                    allowed_upload_mime_types
+                )
                 key.save()
                 docling_options_text = (
                     json.dumps(key.docling_options_json, indent=2, sort_keys=True)

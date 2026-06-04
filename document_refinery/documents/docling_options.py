@@ -6,6 +6,7 @@ from typing import Any
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
+from .formats import IMPLEMENTED_INPUT_FORMATS, PLANNED_INPUT_FORMATS
 from .profiles import (
     get_profile_definition,
     build_pdf_pipeline_options_from_dict,
@@ -40,6 +41,12 @@ PIPELINE_OPTION_KEYS = {
     "generate_picture_images",
     "images_scale",
     "ocr_options",
+}
+PDF_ONLY_OPTION_KEYS = PIPELINE_OPTION_KEYS | {
+    "ocr",
+    "ocr_engine",
+    "ocr_languages",
+    "force_full_page_ocr",
 }
 UNSUPPORTED_DOC_OPTION_KEYS = {
     "do_picture_description": "Picture description is not supported yet.",
@@ -194,6 +201,25 @@ def validate_docling_options_payload(options: dict | None) -> None:
     normalize_docling_options(options)
 
 
+def validate_docling_options_for_input_format(
+    options: dict | None, input_format: str, profile: str | None = None
+) -> None:
+    input_format = (input_format or "").strip().lower()
+    if input_format in ("", "pdf"):
+        return
+    if profile:
+        raise ValidationError("Docling profiles are currently supported for PDF inputs only.")
+    normalized, _warnings = normalize_docling_options(options)
+    incompatible = sorted(key for key in normalized if key in PDF_ONLY_OPTION_KEYS)
+    if incompatible:
+        raise ValidationError(
+            "PDF-only Docling options are not supported for "
+            f"{input_format} inputs: "
+            + ", ".join(incompatible)
+            + "."
+        )
+
+
 def validate_effective_options(options: dict | None) -> None:
     normalize_docling_options(options)
 
@@ -273,8 +299,8 @@ def option_schema() -> list[dict[str, Any]]:
 def capabilities_payload() -> dict[str, Any]:
     return {
         "input_formats": {
-            "implemented": ["pdf"],
-            "planned": ["docx", "pptx", "xlsx", "html", "image", "audio"],
+            "implemented": list(IMPLEMENTED_INPUT_FORMATS),
+            "planned": list(PLANNED_INPUT_FORMATS),
             "not_offered": ["remote_services", "external_plugins"],
         },
         "profiles": profile_catalog(),
@@ -289,8 +315,10 @@ def capabilities_payload() -> dict[str, Any]:
         },
         "features": {
             "implemented": [
-                "pdf_upload",
+                "document_upload",
                 "pdf_signature_check",
+                "ooxml_signature_check",
+                "multi_format_upload",
                 "profile_presets",
                 "docling_json",
                 "markdown",
@@ -299,7 +327,7 @@ def capabilities_payload() -> dict[str, Any]:
                 "figures_zip",
                 "runtime_diagnostics",
             ],
-            "planned": ["real_chunking", "vlm_pipeline", "multi_format_upload"],
+            "planned": ["real_chunking", "vlm_pipeline"],
             "not_offered": ["remote_services", "external_plugins", "asr_audio_video"],
         },
     }

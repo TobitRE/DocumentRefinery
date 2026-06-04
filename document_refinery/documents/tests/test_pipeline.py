@@ -11,6 +11,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from authn.models import APIKey, Tenant
+from documents.formats import DOCX
 from documents.models import Artifact, ArtifactKind, Document, IngestionJob, IngestionJobStatus, IngestionStage
 from documents.docling_options import (
     build_pdf_pipeline_options,
@@ -28,6 +29,9 @@ from documents.tasks import (
 
 class DummyInputFormat(Enum):
     PDF = "pdf"
+    DOCX = "docx"
+    PPTX = "pptx"
+    XLSX = "xlsx"
 
 
 class DummyPdfFormatOption:
@@ -48,22 +52,32 @@ class TestPipelineTasks(TestCase):
             active=True,
         )
 
-    def _make_doc_job(self, data_root: str):
+    def _make_doc_job(
+        self,
+        data_root: str,
+        *,
+        original_filename: str = "sample.pdf",
+        mime_type: str = "application/pdf",
+        extension: str = ".pdf",
+        content: bytes = b"%PDF-1.4 fake\n",
+    ):
         doc = Document(
             tenant=self.tenant,
             created_by_key=self.api_key,
-            original_filename="sample.pdf",
+            original_filename=original_filename,
             sha256="",
-            mime_type="application/pdf",
+            mime_type=mime_type,
             size_bytes=10,
             storage_relpath_quarantine="pending",
             status="UPLOADED",
         )
-        relpath = os.path.join("uploads", "quarantine", str(self.tenant.id), f"{doc.uuid}.pdf")
+        relpath = os.path.join(
+            "uploads", "quarantine", str(self.tenant.id), f"{doc.uuid}{extension}"
+        )
         abs_path = os.path.join(data_root, relpath)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         with open(abs_path, "wb") as handle:
-            handle.write(b"%PDF-1.4 fake\n")
+            handle.write(content)
         doc.storage_relpath_quarantine = relpath
         doc.save()
 
@@ -89,8 +103,27 @@ class TestPipelineTasks(TestCase):
             job.refresh_from_db()
             self.assertEqual(doc.status, "CLEAN")
             self.assertTrue(doc.storage_relpath_clean)
+            self.assertTrue(doc.storage_relpath_clean.endswith(".pdf"))
             self.assertTrue(os.path.exists(doc.get_clean_path()))
             self.assertIsNotNone(job.scan_ms)
+
+    def test_scan_preserves_office_extension_when_moving_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(
+                tmpdir,
+                original_filename="sample.docx",
+                mime_type=DOCX.primary_mime_type,
+                extension=".docx",
+                content=b"fake docx",
+            )
+            abs_path = doc.get_quarantine_path()
+
+            with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
+                mock_scan.return_value = {abs_path: ("OK", "")}
+                scan_pdf_task(job.id)
+
+            doc.refresh_from_db()
+            self.assertTrue(doc.storage_relpath_clean.endswith(".docx"))
 
     def test_scan_marks_infected(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -204,6 +237,45 @@ class TestPipelineTasks(TestCase):
             pipeline_options = pdf_option.pipeline_options
             self.assertFalse(pipeline_options.do_ocr)
             self.assertFalse(pipeline_options.do_table_structure)
+
+    def test_convert_uses_office_input_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(
+                tmpdir,
+                original_filename="sample.docx",
+                mime_type=DOCX.primary_mime_type,
+                extension=".docx",
+                content=b"fake docx",
+            )
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.docx")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"fake docx")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling_core.types.doc import DoclingDocument
+
+            captured = {}
+
+            class DummyConverter:
+                def __init__(self, *args, **kwargs):
+                    captured["allowed_formats"] = kwargs.get("allowed_formats")
+                    captured["format_options"] = kwargs.get("format_options")
+
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with self._patch_docling_converter(DummyConverter):
+                docling_convert_task(job.id)
+
+            self.assertEqual(captured["allowed_formats"], [DummyInputFormat.DOCX])
+            self.assertIn(DummyInputFormat.DOCX, captured["format_options"])
 
     def test_convert_handles_partial_success_as_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -402,9 +474,25 @@ class TestPipelineTasks(TestCase):
             self.assertEqual(job.error_code, "DOCLING_EXPORT_FAILED")
 
     def _patch_docling_converter(self, converter):
+        class ConverterAdapter(converter):
+            def __init__(self, *args, **kwargs):
+                try:
+                    super().__init__(*args, **kwargs)
+                except TypeError:
+                    super().__init__()
+
         return patch(
             "documents.tasks._load_docling_converter",
-            return_value=(converter, DummyPdfFormatOption, DummyInputFormat),
+            return_value=(
+                ConverterAdapter,
+                {
+                    "pdf": DummyPdfFormatOption,
+                    "docx": DummyPdfFormatOption,
+                    "pptx": DummyPdfFormatOption,
+                    "xlsx": DummyPdfFormatOption,
+                },
+                DummyInputFormat,
+            ),
         )
 
     def test_all_profiles_build_docling_pipeline_options(self):

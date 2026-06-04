@@ -96,10 +96,10 @@
           name="allowed_upload_mime_types"
           id="allowed_upload_mime_types"
           value="{{ allowed_upload_mime_types_text }}"
-          placeholder="application/pdf, application/x-pdf"
+          placeholder="application/pdf, application/x-pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.presentationml.presentation, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           required
         />
-        <div class="muted">Restricts file types accepted at <span class="mono">/v1/documents/</span>.</div>
+        <div class="muted">Restricts PDF, DOCX, PPTX, and XLSX file types accepted at <span class="mono">/v1/documents/</span>.</div>
       </div>
       <div class="panel">
         <div class="muted">Quick scopes</div>

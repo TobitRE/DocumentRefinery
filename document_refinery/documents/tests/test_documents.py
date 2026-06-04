@@ -1,7 +1,9 @@
 import hashlib
+import io
 import os
 import tempfile
 import uuid
+import zipfile
 from unittest.mock import patch
 
 from django.db import IntegrityError
@@ -10,6 +12,7 @@ from rest_framework.test import APIClient
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from authn.models import APIKey, Tenant
+from documents.formats import DOCX, PPTX, XLSX
 from documents.models import Document, IngestionJob, IngestionJobStatus, IngestionStage
 
 
@@ -31,6 +34,14 @@ class TestDocumentUpload(TestCase):
     def _auth(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
 
+    def _ooxml_bytes(self, required_member: str) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("[Content_Types].xml", "<Types></Types>")
+            archive.writestr("_rels/.rels", "<Relationships></Relationships>")
+            archive.writestr(required_member, "<root>Hello</root>")
+        return buffer.getvalue()
+
     def test_upload_writes_file_and_hash(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
         expected_hash = hashlib.sha256(content).hexdigest()
@@ -45,7 +56,48 @@ class TestDocumentUpload(TestCase):
             self.assertEqual(doc.sha256, expected_hash)
             self.assertEqual(doc.size_bytes, len(content))
             self.assertTrue(doc.storage_relpath_quarantine)
+            self.assertTrue(doc.storage_relpath_quarantine.endswith(".pdf"))
             self.assertTrue(os.path.exists(doc.get_quarantine_path()))
+
+    def test_upload_accepts_office_open_xml_formats(self):
+        cases = [
+            ("sample.docx", DOCX, "word/document.xml"),
+            ("sample.pptx", PPTX, "ppt/presentation.xml"),
+            ("sample.xlsx", XLSX, "xl/workbook.xml"),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            for filename, document_format, required_member in cases:
+                with self.subTest(filename=filename):
+                    content = self._ooxml_bytes(required_member)
+                    upload = SimpleUploadedFile(
+                        filename,
+                        content,
+                        content_type=document_format.primary_mime_type,
+                    )
+                    response = self.client.post(
+                        "/v1/documents/", {"file": upload}, format="multipart"
+                    )
+                    self.assertEqual(response.status_code, 201)
+                    doc = Document.objects.get(pk=response.data["id"])
+                    self.assertEqual(doc.mime_type, document_format.primary_mime_type)
+                    self.assertTrue(
+                        doc.storage_relpath_quarantine.endswith(
+                            document_format.primary_extension
+                        )
+                    )
+
+    def test_upload_rejects_spoofed_office_open_xml(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile(
+                "sample.docx",
+                b"not a zip",
+                content_type=DOCX.primary_mime_type,
+            )
+            response = self.client.post("/v1/documents/", {"file": upload}, format="multipart")
+            self.assertEqual(response.status_code, 415)
+            self.assertEqual(response.data["error_code"], "INVALID_DOCUMENT")
 
     def test_upload_rejects_large_file(self):
         content = b"%PDF-1.4\n" + (b"x" * (1024 * 1024))
@@ -276,6 +328,23 @@ class TestDocumentUpload(TestCase):
             self.assertEqual(job.profile, "fast_text")
             self.assertEqual(job.options_json.get("exports"), ["text", "markdown", "doctags"])
 
+    def test_upload_rejects_profile_for_office_document(self):
+        content = self._ooxml_bytes("word/document.xml")
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            self._auth()
+            upload = SimpleUploadedFile(
+                "sample.docx",
+                content,
+                content_type=DOCX.primary_mime_type,
+            )
+            response = self.client.post(
+                "/v1/documents/",
+                {"file": upload, "ingest": "true", "profile": "fast_text"},
+                format="multipart",
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.data["error_code"], "INVALID_OPTIONS")
+
     def test_upload_profile_overrides_exports(self):
         content = b"%PDF-1.4\n%fake\n1 0 obj\n<<>>\nendobj\n"
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -366,8 +435,11 @@ class TestDoclingMetadataAPI(TestCase):
     def test_capabilities_endpoint_marks_planned_features(self):
         response = self.client.get("/v1/docling/capabilities/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["input_formats"]["implemented"], ["pdf"])
-        self.assertIn("multi_format_upload", response.data["features"]["planned"])
+        self.assertEqual(
+            response.data["input_formats"]["implemented"],
+            ["pdf", "docx", "pptx", "xlsx"],
+        )
+        self.assertIn("multi_format_upload", response.data["features"]["implemented"])
         self.assertIn("real_chunking", response.data["features"]["planned"])
         self.assertIn("vlm_pipeline", response.data["features"]["planned"])
         schema = {item["key"]: item for item in response.data["options_schema"]}

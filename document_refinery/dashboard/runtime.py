@@ -400,6 +400,9 @@ def runtime_diagnostics_payload(*, force_refresh: bool = False) -> dict[str, Any
             _status_package("docling", "2.96.1", lambda value: value == "2.96.1"),
             _status_package("docling-core", "installed"),
             _status_package("docling-parse", "installed"),
+            _status_package("python-docx", "installed"),
+            _status_package("python-pptx", "installed"),
+            _status_package("openpyxl", "installed"),
             _status_package("onnxruntime", "installed"),
         ],
         "environment": {
@@ -508,6 +511,36 @@ def _build_pdf() -> bytes:
     return header + b"".join(objects) + b"".join(xref_lines) + trailer
 
 
+def _write_docx(path: Path) -> None:
+    from docx import Document
+
+    document = Document()
+    document.add_heading("Hello Docling", level=1)
+    document.add_paragraph("Runtime smoke DOCX.")
+    document.save(path)
+
+
+def _write_pptx(path: Path) -> None:
+    from pptx import Presentation
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+    slide.shapes.title.text = "Hello Docling"
+    slide.placeholders[1].text = "Runtime smoke PPTX."
+    presentation.save(path)
+
+
+def _write_xlsx(path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Smoke"
+    worksheet["A1"] = "Hello Docling"
+    worksheet["A2"] = "Runtime smoke XLSX."
+    workbook.save(path)
+
+
 def _smoke_worker(profile: str, result_queue) -> None:
     try:
         os.environ.setdefault("DOCLING_DEVICE", str(getattr(settings, "DOCLING_DEVICE", "cpu")))
@@ -520,22 +553,44 @@ def _smoke_worker(profile: str, result_queue) -> None:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pdf_path = Path(tmpdir) / "runtime-smoke.pdf"
+            docx_path = Path(tmpdir) / "runtime-smoke.docx"
+            pptx_path = Path(tmpdir) / "runtime-smoke.pptx"
+            xlsx_path = Path(tmpdir) / "runtime-smoke.xlsx"
             pdf_path.write_bytes(_build_pdf())
+            _write_docx(docx_path)
+            _write_pptx(pptx_path)
+            _write_xlsx(xlsx_path)
             pipeline_options = build_profile_pipeline_options(profile)
             converter = DocumentConverter(
+                allowed_formats=[
+                    InputFormat.PDF,
+                    InputFormat.DOCX,
+                    InputFormat.PPTX,
+                    InputFormat.XLSX,
+                ],
                 format_options={
                     InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
                 }
             )
-            result = converter.convert(str(pdf_path), max_num_pages=1, max_file_size=2_000_000)
-        status = getattr(getattr(result, "status", None), "value", "success")
-        errors = [str(item)[:500] for item in (getattr(result, "errors", []) or [])]
+            results = {}
+            for key, path in {
+                "pdf": pdf_path,
+                "docx": docx_path,
+                "pptx": pptx_path,
+                "xlsx": xlsx_path,
+            }.items():
+                result = converter.convert(
+                    str(path), max_num_pages=1, max_file_size=2_000_000
+                )
+                status = getattr(getattr(result, "status", None), "value", "success")
+                errors = [str(item)[:500] for item in (getattr(result, "errors", []) or [])]
+                results[key] = {"status": str(status), "errors": errors}
+        ok = all(item["status"].lower() == "success" for item in results.values())
         result_queue.put(
             {
-                "status": "ok" if str(status).lower() == "success" else "fail",
-                "docling_status": str(status),
+                "status": "ok" if ok else "fail",
+                "formats": results,
                 "profile": profile,
-                "errors": errors,
             }
         )
     except Exception as exc:

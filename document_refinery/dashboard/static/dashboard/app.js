@@ -324,8 +324,29 @@
       );
       renderDashboardKeyScopes(qs("[data-dashboard-context-scopes]", context), selectedKey);
       syncTenantActionAvailability(selectedKey);
+      syncDashboardUploadAccept(root, selectedKey);
     });
     document.dispatchEvent(new CustomEvent("dr:dashboard-context-ready"));
+  }
+
+  function syncDashboardUploadAccept(root, selectedKey) {
+    const fileInput = qs("#uploadFile", root);
+    if (!fileInput) return;
+    const mimeTypes = selectedKey?.allowed_upload_mime_types || [];
+    const extensionByMime = {
+      "application/pdf": ".pdf",
+      "application/x-pdf": ".pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    };
+    const acceptValues = [];
+    mimeTypes.forEach((mimeType) => {
+      if (!mimeType) return;
+      acceptValues.push(mimeType);
+      if (extensionByMime[mimeType]) acceptValues.push(extensionByMime[mimeType]);
+    });
+    if (acceptValues.length) fileInput.setAttribute("accept", Array.from(new Set(acceptValues)).join(","));
   }
 
   function initDashboardContext(root = document) {
@@ -707,6 +728,7 @@
       const latest = item.latest_job;
       const documentId = escapeHtml(item.id);
       const filename = escapeHtml(item.original_filename || "-");
+      const mimeType = escapeHtml(item.mime_type || "-");
       const uuid = escapeHtml(item.uuid);
       const status = escapeHtml(item.status);
       const origin = item.created_via === "DASHBOARD" ? "Dashboard" : "API";
@@ -717,6 +739,7 @@
         <td>
           <span class="mono">#${documentId}</span><br />
           <span class="dr-table-filename" title="${filename}">${filename}</span>
+          <span class="status status-neutral">${mimeType}</span>
           <span class="muted mono dr-table-uuid" title="${uuid}">${uuid}</span>
         </td>
         <td><span class="${statusClass(item.status)}">${status}</span></td>
@@ -777,7 +800,7 @@
         try {
           const fileInput = qs("#uploadFile", page);
           const files = Array.from(fileInput?.files || []);
-          if (!files.length) throw new Error("Select a PDF before uploading.");
+          if (!files.length) throw new Error("Select a document before uploading.");
           const externalUuid = qs("#uploadExternalUuid", page)?.value.trim();
           const profile = qs("#uploadProfile", page)?.value.trim();
           const options = readEffectiveDoclingOptions(page, "#uploadOptionsJson");

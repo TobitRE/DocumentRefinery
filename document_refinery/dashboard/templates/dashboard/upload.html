@@ -6,9 +6,9 @@
   <div class="dr-page-header">
     <div>
       <div class="dr-page-kicker">Upload & Jobs</div>
-      <h1 class="page-title">PDF upload</h1>
+      <h1 class="page-title">Document upload</h1>
       <div class="dr-page-description">
-        PDF-only ingestion with structured Docling controls, profile presets, and JSON fallback.
+        PDF, DOCX, PPTX, and XLSX ingestion with structured Docling controls and JSON fallback.
       </div>
     </div>
     <a class="btn btn-outline-primary" href="/dashboard/jobs/">Open jobs</a>
@@ -22,12 +22,12 @@
     <div class="dr-grid-wide dr-workflow-grid" style="margin-top: 1rem;">
       <section class="card">
         <div class="card-body">
-          <h2 class="card-title">Upload or run PDF documents</h2>
+          <h2 class="card-title">Upload or run documents</h2>
           <div class="form-grid">
             <div class="field">
-              <label for="uploadFile">PDF files</label>
-              <input type="file" id="uploadFile" accept="application/pdf,.pdf" multiple />
-              <div class="muted">Only PDF and PDF-like MIME types are accepted by the backend.</div>
+              <label for="uploadFile">Document files</label>
+              <input type="file" id="uploadFile" accept="application/pdf,.pdf,application/x-pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" multiple />
+              <div class="muted">PDF, DOCX, PPTX, and XLSX are accepted when enabled for the selected API key.</div>
             </div>
             <div class="field">
               <label for="uploadExternalUuid">External UUID</label>
@@ -68,7 +68,7 @@
             <div class="dr-section-heading">
               <div>
                 <h3 class="card-title">Existing documents</h3>
-                <div class="muted">Run another job from an already uploaded document using the selected profile and options above. New runs can create tenant-billed Docling work.</div>
+                <div class="muted">Run another job from an already uploaded document using the selected options above. Profiles are currently PDF-only. New runs can create tenant-billed Docling work.</div>
               </div>
               <button type="button" class="ghost" data-documents-refresh>Refresh</button>
             </div>
