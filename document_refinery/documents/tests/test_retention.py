@@ -237,7 +237,11 @@ class TestRetentionCleanup(RetentionTestCase):
                 storage_relpath_clean=clean_relpath,
                 expires_at=timezone.now() - timedelta(days=1),
             )
-            job = self._make_job(doc, source_relpath=source_relpath)
+            job = self._make_job(
+                doc,
+                source_relpath=source_relpath,
+                status=IngestionJobStatus.FAILED,
+            )
             artifact_relpath = os.path.join(
                 "artifacts", str(self.tenant.id), str(job.id), "docling.json"
             )
@@ -265,6 +269,24 @@ class TestRetentionCleanup(RetentionTestCase):
             )
             self.assertFalse(os.path.exists(os.path.join(tmpdir, "uploads", "clean", str(self.tenant.id))))
             self.assertFalse(os.path.exists(os.path.join(tmpdir, "artifacts", str(self.tenant.id))))
+
+    def test_cleanup_expired_documents_skips_active_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            quarantine_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "doc.pdf"
+            )
+            quarantine_path = self._write_file(tmpdir, quarantine_relpath)
+            doc = self._make_doc(
+                storage_relpath_quarantine=quarantine_relpath,
+                expires_at=timezone.now() - timedelta(days=1),
+            )
+            self._make_job(doc, status=IngestionJobStatus.RUNNING)
+
+            result = cleanup_expired_documents.apply()
+
+            self.assertEqual(result.result, 0)
+            self.assertTrue(Document.objects.filter(pk=doc.pk).exists())
+            self.assertTrue(os.path.exists(quarantine_path))
 
     def test_cleanup_infected_quarantine_respects_tenant_retention(self):
         self.tenant.infected_quarantine_retention_days = 1

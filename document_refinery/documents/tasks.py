@@ -212,6 +212,11 @@ def cleanup_expired_documents(self) -> int:
     expired_docs = Document.objects.filter(expires_at__lt=now)
     cleaned = 0
     for doc in expired_docs:
+        if IngestionJob.objects.filter(
+            document=doc,
+            status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+        ).exists():
+            continue
         artifacts = Artifact.objects.filter(job__document=doc)
         for artifact in artifacts:
             _remove_storage_file(artifact.storage_relpath, "artifacts")
