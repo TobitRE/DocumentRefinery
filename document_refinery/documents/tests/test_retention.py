@@ -16,6 +16,7 @@ from documents.models import (
     Document,
     DocumentStatus,
     IngestionJob,
+    IngestionJobStatus,
 )
 from documents.tasks import (
     _write_artifact,
@@ -286,6 +287,40 @@ class TestRetentionCleanup(RetentionTestCase):
             self.assertEqual(result.result, 1)
             self.assertTrue(Document.objects.filter(pk=doc.pk).exists())
             self.assertFalse(os.path.exists(abs_path))
+            self.assertFalse(
+                os.path.exists(os.path.join(tmpdir, "uploads", "quarantine", str(self.tenant.id)))
+            )
+
+    def test_cleanup_infected_quarantine_removes_quarantined_job_source_copy(self):
+        self.tenant.infected_quarantine_retention_days = 1
+        self.tenant.save(update_fields=["infected_quarantine_retention_days"])
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            original_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "original.pdf"
+            )
+            source_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "jobs", "source.pdf"
+            )
+            original_path = self._write_file(tmpdir, original_relpath)
+            source_path = self._write_file(tmpdir, source_relpath)
+            doc = self._make_doc(
+                storage_relpath_quarantine=original_relpath,
+                status=DocumentStatus.INFECTED,
+                infected_at=timezone.now() - timedelta(days=2),
+            )
+            self._make_job(
+                doc,
+                status=IngestionJobStatus.QUARANTINED,
+                source_relpath=source_relpath,
+            )
+
+            result = cleanup_expired_documents.apply()
+
+            self.assertEqual(result.result, 2)
+            self.assertTrue(Document.objects.filter(pk=doc.pk).exists())
+            self.assertFalse(os.path.exists(original_path))
+            self.assertFalse(os.path.exists(source_path))
             self.assertFalse(
                 os.path.exists(os.path.join(tmpdir, "uploads", "quarantine", str(self.tenant.id)))
             )

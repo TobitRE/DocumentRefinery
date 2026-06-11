@@ -181,12 +181,23 @@ def _cleanup_infected_quarantine_files(now) -> int:
         reference_at = doc.infected_at or doc.modified_at or doc.created_at
         if not reference_at or reference_at > now - timedelta(days=retention_days):
             continue
-        removed = _remove_storage_file(
-            doc.storage_relpath_quarantine,
-            os.path.join("uploads", "quarantine"),
+        relpaths = [doc.storage_relpath_quarantine]
+        relpaths.extend(
+            IngestionJob.objects.filter(
+                document=doc,
+                status=IngestionJobStatus.QUARANTINED,
+            )
+            .exclude(source_relpath__isnull=True)
+            .exclude(source_relpath="")
+            .values_list("source_relpath", flat=True)
         )
-        if removed:
-            cleaned += 1
+        for relpath in set(relpaths):
+            removed = _remove_storage_file(
+                relpath,
+                os.path.join("uploads", "quarantine"),
+            )
+            if removed:
+                cleaned += 1
     return cleaned
 
 
