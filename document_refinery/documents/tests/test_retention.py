@@ -314,6 +314,51 @@ class TestRetentionCleanup(RetentionTestCase):
             self.assertTrue(Document.objects.filter(pk=doc.pk).exists())
             self.assertTrue(os.path.exists(quarantine_path))
 
+    def test_cleanup_expired_infected_document_removes_artifacts_but_keeps_audit_row(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(
+            DATA_ROOT=tmpdir,
+            ARTIFACT_RETENTION_DAYS=0,
+            INFECTED_QUARANTINE_RETENTION_DAYS=0,
+        ):
+            quarantine_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "infected.pdf"
+            )
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), "infected.pdf")
+            quarantine_path = self._write_file(tmpdir, quarantine_relpath)
+            clean_path = self._write_file(tmpdir, clean_relpath)
+            doc = self._make_doc(
+                storage_relpath_quarantine=quarantine_relpath,
+                storage_relpath_clean=clean_relpath,
+                status=DocumentStatus.INFECTED,
+                infected_at=timezone.now() - timedelta(days=2),
+                expires_at=timezone.now() - timedelta(days=1),
+            )
+            job = self._make_job(doc, status=IngestionJobStatus.SUCCEEDED)
+            artifact_relpath = os.path.join(
+                "artifacts", str(self.tenant.id), str(job.id), "docling.json"
+            )
+            artifact_path = self._write_file(tmpdir, artifact_relpath, b"{}")
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=job,
+                kind=ArtifactKind.DOCLING_JSON,
+                storage_relpath=artifact_relpath,
+                checksum_sha256="d" * 64,
+                size_bytes=2,
+            )
+
+            result = cleanup_expired_documents.apply()
+
+            self.assertEqual(result.result, 1)
+            self.assertTrue(Document.objects.filter(pk=doc.pk).exists())
+            doc.refresh_from_db()
+            self.assertIsNone(doc.storage_relpath_clean)
+            self.assertFalse(Artifact.objects.filter(pk=artifact.pk).exists())
+            self.assertFalse(os.path.exists(artifact_path))
+            self.assertFalse(os.path.exists(clean_path))
+            self.assertTrue(os.path.exists(quarantine_path))
+
     def test_cleanup_infected_quarantine_respects_tenant_retention(self):
         self.tenant.infected_quarantine_retention_days = 1
         self.tenant.save(update_fields=["infected_quarantine_retention_days"])

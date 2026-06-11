@@ -173,6 +173,21 @@ def cleanup_expired_artifacts(self) -> int:
     return deleted
 
 
+def _has_active_jobs(doc: Document) -> bool:
+    return IngestionJob.objects.filter(
+        document=doc,
+        status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+    ).exists()
+
+
+def _cleanup_artifacts_for_document(doc: Document) -> int:
+    artifacts = list(Artifact.objects.filter(job__document=doc))
+    for artifact in artifacts:
+        _remove_storage_file(artifact.storage_relpath, "artifacts")
+    Artifact.objects.filter(pk__in=[artifact.pk for artifact in artifacts]).delete()
+    return len(artifacts)
+
+
 def _cleanup_infected_quarantine_files(now) -> int:
     cleaned = 0
     docs = Document.objects.filter(status=DocumentStatus.INFECTED).select_related("tenant")
@@ -211,20 +226,27 @@ def _cleanup_infected_quarantine_files(now) -> int:
 @shared_task(bind=True)
 def cleanup_expired_documents(self) -> int:
     now = timezone.now()
+    expired_infected_docs = Document.objects.filter(
+        expires_at__lt=now,
+        status=DocumentStatus.INFECTED,
+    )
+    cleaned = 0
+    for doc in expired_infected_docs:
+        if _has_active_jobs(doc):
+            continue
+        cleaned += _cleanup_artifacts_for_document(doc)
+        if doc.storage_relpath_clean:
+            _remove_storage_file(doc.storage_relpath_clean, os.path.join("uploads", "clean"))
+            doc.storage_relpath_clean = None
+            doc.save(update_fields=["storage_relpath_clean"])
+
     expired_docs = Document.objects.filter(expires_at__lt=now).exclude(
         status=DocumentStatus.INFECTED
     )
-    cleaned = 0
     for doc in expired_docs:
-        if IngestionJob.objects.filter(
-            document=doc,
-            status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
-        ).exists():
+        if _has_active_jobs(doc):
             continue
-        artifacts = Artifact.objects.filter(job__document=doc)
-        for artifact in artifacts:
-            _remove_storage_file(artifact.storage_relpath, "artifacts")
-        artifacts.delete()
+        _cleanup_artifacts_for_document(doc)
         source_relpaths = list(
             IngestionJob.objects.filter(document=doc)
             .exclude(source_relpath__isnull=True)
