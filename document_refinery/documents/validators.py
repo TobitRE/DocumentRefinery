@@ -32,9 +32,19 @@ def _validate_resolved_hosts(host: str, port: int) -> None:
         raise ValidationError("Webhook URL host could not be resolved.")
 
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError as exc:
+            raise ValidationError("Webhook URL host could not be resolved.") from exc
         if not ip.is_global:
             raise ValidationError("Webhook URL resolves to a private or local address.")
+
+
+def _validated_port(parsed) -> int:
+    try:
+        return parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValidationError("Webhook URL must include a valid port.") from exc
 
 
 def validate_webhook_url(url: str) -> None:
@@ -52,6 +62,7 @@ def validate_webhook_url(url: str) -> None:
     host = parsed.hostname.strip().lower().rstrip(".")
     if host in _BLOCKED_HOSTS or any(host.endswith(suffix) for suffix in _BLOCKED_SUFFIXES):
         raise ValidationError("Webhook URL host is not allowed.")
+    port = _validated_port(parsed)
 
     if _host_in_allowlist(host):
         return
@@ -59,7 +70,6 @@ def validate_webhook_url(url: str) -> None:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
         _validate_resolved_hosts(host, port)
         return
 

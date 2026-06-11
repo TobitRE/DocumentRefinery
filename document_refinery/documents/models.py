@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 from django.conf import settings
 from django.db import models
@@ -6,6 +6,19 @@ from django.utils import timezone
 
 from authn.models import APIKey, Tenant
 from core.models import BaseModel
+
+
+def resolve_data_root_path(relpath: str | None) -> str:
+    if not relpath:
+        return ""
+    data_root = Path(settings.DATA_ROOT)
+    data_root_resolved = data_root.resolve()
+    path = data_root / str(relpath)
+    try:
+        path.resolve().relative_to(data_root_resolved)
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    return str(path)
 
 
 class DocumentStatus(models.TextChoices):
@@ -92,12 +105,12 @@ class Document(BaseModel):
         return f"{self.original_filename} ({self.tenant_id})"
 
     def get_quarantine_path(self) -> str:
-        return os.path.join(settings.DATA_ROOT, self.storage_relpath_quarantine)
+        return resolve_data_root_path(self.storage_relpath_quarantine)
 
     def get_clean_path(self) -> str:
         if not self.storage_relpath_clean:
             return ""
-        return os.path.join(settings.DATA_ROOT, self.storage_relpath_clean)
+        return resolve_data_root_path(self.storage_relpath_clean)
 
 
 class IngestionJob(BaseModel):
@@ -225,7 +238,7 @@ class Artifact(BaseModel):
         return f"{self.kind} ({self.job_id})"
 
     def get_storage_path(self) -> str:
-        return os.path.join(settings.DATA_ROOT, self.storage_relpath)
+        return resolve_data_root_path(self.storage_relpath)
 
 
 class JobEvent(BaseModel):

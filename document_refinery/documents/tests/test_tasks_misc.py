@@ -79,3 +79,32 @@ class TestTaskHelpers(TestCase):
             self.assertEqual(result.result, 1)
             self.assertFalse(os.path.exists(abs_path))
             self.assertFalse(Artifact.objects.filter(pk=artifact.pk).exists())
+
+    def test_cleanup_expired_artifacts_does_not_remove_files_outside_data_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_root = os.path.join(tmpdir, "data")
+            os.makedirs(data_root, exist_ok=True)
+            outside_path = os.path.join(tmpdir, "keep.txt")
+            with open(outside_path, "wb") as handle:
+                handle.write(b"do not delete")
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=IngestionJob.objects.create(
+                    tenant=self.tenant,
+                    created_by_key=self.api_key,
+                    document=self.doc,
+                ),
+                kind=ArtifactKind.TEXT,
+                storage_relpath="../keep.txt",
+                checksum_sha256="c" * 64,
+                size_bytes=13,
+                expires_at=timezone.now() - timezone.timedelta(days=1),
+            )
+
+            with override_settings(DATA_ROOT=data_root):
+                result = cleanup_expired_artifacts.apply()
+
+            self.assertEqual(result.result, 1)
+            self.assertTrue(os.path.exists(outside_path))
+            self.assertFalse(Artifact.objects.filter(pk=artifact.pk).exists())

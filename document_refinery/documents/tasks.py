@@ -32,6 +32,7 @@ from .models import (
     IngestionJobStatus,
     IngestionStage,
     Document,
+    resolve_data_root_path,
     WebhookDelivery,
     WebhookDeliveryStatus,
     WebhookEndpoint,
@@ -127,7 +128,7 @@ def cleanup_expired_artifacts(self) -> int:
     expired_artifacts = Artifact.objects.filter(expires_at__lt=now)
     deleted = 0
     for artifact in expired_artifacts:
-        abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+        abs_path = artifact.get_storage_path()
         try:
             if os.path.exists(abs_path):
                 os.remove(abs_path)
@@ -146,7 +147,7 @@ def cleanup_expired_documents(self) -> int:
     for doc in expired_docs:
         artifacts = Artifact.objects.filter(job__document=doc)
         for artifact in artifacts:
-            abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+            abs_path = artifact.get_storage_path()
             try:
                 if os.path.exists(abs_path):
                     os.remove(abs_path)
@@ -368,7 +369,7 @@ def scan_pdf_task(self, job_id: int) -> int:
     start = time.monotonic()
     document = job.document
     relpath = job.source_relpath or document.storage_relpath_quarantine
-    abs_path = os.path.join(settings.DATA_ROOT, relpath) if relpath else ""
+    abs_path = resolve_data_root_path(relpath)
     if not abs_path or not os.path.exists(abs_path):
         _mark_failed(job, "MISSING_SOURCE_FILE", "Source file is missing for scan.")
         raise RuntimeError("Missing source file")
@@ -407,7 +408,7 @@ def scan_pdf_task(self, job_id: int) -> int:
         str(job.tenant_id),
         f"{document.uuid}{extension_for_mime_type(document.mime_type)}",
     )
-    clean_abspath = os.path.join(settings.DATA_ROOT, clean_relpath)
+    clean_abspath = resolve_data_root_path(clean_relpath)
     os.makedirs(os.path.dirname(clean_abspath), exist_ok=True)
     os.replace(abs_path, clean_abspath)
 

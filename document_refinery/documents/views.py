@@ -29,6 +29,7 @@ from .models import (
     IngestionJob,
     IngestionJobStatus,
     IngestionStage,
+    resolve_data_root_path,
     WebhookEndpoint,
 )
 from .tasks import queue_job_webhooks, start_ingestion_pipeline
@@ -190,7 +191,7 @@ def _copy_document_source_for_job(document: Document) -> tuple[str, str] | None:
         str(document.tenant_id),
         f"{document.uuid}-{uuid.uuid4()}{extension}",
     )
-    abs_path = os.path.join(settings.DATA_ROOT, relpath)
+    abs_path = resolve_data_root_path(relpath)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
     shutil.copy2(source_abs, abs_path)
     return relpath, abs_path
@@ -285,7 +286,7 @@ def _stash_job_artifacts_for_retry(job: IngestionJob) -> list[dict[str, object]]
     artifacts = list(Artifact.objects.filter(job=job))
     try:
         for artifact in artifacts:
-            abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+            abs_path = artifact.get_storage_path()
             backup_path = ""
             if os.path.exists(abs_path):
                 backup_path = f"{abs_path}.retry-backup-{uuid.uuid4().hex}"
@@ -369,7 +370,7 @@ def _rollback_created_jobs(jobs: list[IngestionJob], source_paths: list[str] | N
         )
         job.delete()
         if stored_relpath:
-            _safe_remove_file(os.path.join(settings.DATA_ROOT, stored_relpath))
+            _safe_remove_file(resolve_data_root_path(stored_relpath))
 
     for path in source_paths or []:
         _safe_remove_file(path)
@@ -566,7 +567,7 @@ def create_document_for_api_key(
         str(tenant_id),
         f"{doc.uuid}{document_format.primary_extension}",
     )
-    abs_path = os.path.join(settings.DATA_ROOT, relpath)
+    abs_path = resolve_data_root_path(relpath)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
     hasher = hashlib.sha256()
@@ -807,7 +808,8 @@ def retry_job_for_api_key(api_key, job_id, *, dashboard_action_user=None) -> Res
             source_abs_path=source[1],
             dashboard_action_user=dashboard_action_user,
         )
-    if job.source_relpath and os.path.exists(os.path.join(settings.DATA_ROOT, job.source_relpath)):
+    source_abs_path = resolve_data_root_path(job.source_relpath)
+    if job.source_relpath and source_abs_path and os.path.exists(source_abs_path):
         return _retry_job(job, dashboard_action_user=dashboard_action_user)
     return _missing_source_response()
 
@@ -871,7 +873,7 @@ def compare_document_for_api_key(
             str(document.tenant_id),
             f"{document.uuid}-{uuid.uuid4()}{extension_for_mime_type(document.mime_type)}",
         )
-        abs_path = os.path.join(settings.DATA_ROOT, relpath)
+        abs_path = resolve_data_root_path(relpath)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         shutil.copy2(source_abs, abs_path)
 
@@ -931,7 +933,7 @@ def preview_artifact_for_api_key(api_key, artifact_id) -> Response:
     artifact = Artifact.objects.filter(tenant=api_key.tenant, pk=artifact_id).first()
     if not artifact:
         return Response(status=status.HTTP_404_NOT_FOUND)
-    abs_path = os.path.join(settings.DATA_ROOT, artifact.storage_relpath)
+    abs_path = artifact.get_storage_path()
     if not os.path.exists(abs_path):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -1060,7 +1062,7 @@ class ArtifactViewSet(
             return Response(status=status.HTTP_404_NOT_FOUND)
 
         relpath = artifact.storage_relpath
-        abs_path = os.path.join(settings.DATA_ROOT, relpath)
+        abs_path = artifact.get_storage_path()
 
         if not os.path.exists(abs_path):
             return Response(status=status.HTTP_404_NOT_FOUND)

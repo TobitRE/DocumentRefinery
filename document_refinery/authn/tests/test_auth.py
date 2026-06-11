@@ -28,6 +28,16 @@ class TestAPIKeyAuth(TestCase):
         response = self.client.get("/v1/documents/")
         self.assertEqual(response.status_code, 401)
 
+    def test_malformed_authorization_header_rejected(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Api-Key")
+        response = self.client.get("/v1/documents/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_wrong_authorization_keyword_rejected(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.raw_key}")
+        response = self.client.get("/v1/documents/")
+        self.assertEqual(response.status_code, 401)
+
     def test_valid_key_allows_access(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key}")
         response = self.client.get("/v1/documents/")

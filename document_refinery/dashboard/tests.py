@@ -15,7 +15,7 @@ from rest_framework.test import APIClient
 from authn.models import APIKey, Tenant
 from authn.options import DEFAULT_ALLOWED_UPLOAD_MIME_TYPES
 from dashboard.models import DashboardActionAudit
-from dashboard import web_views
+from dashboard import runtime, web_views
 from dashboard.runtime import (
     SMOKE_LOCK_FILENAME,
     SMOKE_RATE_FILENAME,
@@ -839,3 +839,142 @@ class TestDashboardWebHelpers(TestCase):
         self.assertEqual(info["gpus"][0]["name"], "Fake GPU")
         self.assertIsNone(info["gpus"][0]["memory_used_mb"])
         self.assertIsNone(info["gpus"][0]["utilization_pct"])
+
+
+class TestRuntimeDiagnosticsHelpers(TestCase):
+    def tearDown(self):
+        runtime._RUNTIME_CACHE["payload"] = None
+        runtime._RUNTIME_CACHE["ts"] = 0.0
+
+    def test_status_package_handles_missing_match_and_mismatch(self):
+        with patch("dashboard.runtime.version", return_value="5.2.1"):
+            payload = runtime._status_package(
+                "Django",
+                "5.2.x",
+                lambda value: value.startswith("5.2."),
+            )
+        self.assertEqual(payload["status"], "ok")
+
+        with patch("dashboard.runtime.version", return_value="4.2.0"):
+            payload = runtime._status_package(
+                "Django",
+                "5.2.x",
+                lambda value: value.startswith("5.2."),
+            )
+        self.assertEqual(payload["status"], "fail")
+
+        with patch("dashboard.runtime.version", side_effect=runtime.PackageNotFoundError):
+            payload = runtime._status_package("missing", "installed")
+        self.assertEqual(payload["status"], "fail")
+        self.assertIsNone(payload["version"])
+
+    def test_path_and_disk_checks_report_operational_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            payload = runtime._path_check("DATA_ROOT", runtime.Path(tmpdir), must_exist=True)
+            self.assertEqual(payload["status"], "ok")
+            self.assertIsNotNone(payload["disk"])
+
+            with patch("dashboard.runtime.os.access", return_value=False):
+                payload = runtime._path_check("DATA_ROOT", runtime.Path(tmpdir), must_exist=True)
+            self.assertEqual(payload["status"], "fail")
+            self.assertEqual(payload["message"], "not writable")
+
+        missing = runtime._path_check("optional", runtime.Path("/definitely/missing"), must_exist=False)
+        self.assertEqual(missing["status"], "warn")
+        required = runtime._path_check("required", runtime.Path("/definitely/missing"), must_exist=True)
+        self.assertEqual(required["status"], "fail")
+
+        with patch("dashboard.runtime.shutil.disk_usage", side_effect=OSError):
+            self.assertIsNone(runtime._disk_usage(runtime.Path("/")))
+
+    def test_tool_check_reports_missing_success_and_failure(self):
+        with patch("dashboard.runtime.shutil.which", return_value=None):
+            payload = runtime._tool_check("missing-tool", ["--version"])
+        self.assertEqual(payload["status"], "warn")
+
+        result = MagicMock(returncode=0, stdout="tool 1.0\n", stderr="")
+        with patch("dashboard.runtime.shutil.which", return_value="/usr/bin/tool"), patch(
+            "dashboard.runtime.subprocess.run", return_value=result
+        ):
+            payload = runtime._tool_check("tool", ["--version"])
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["version_output"], "tool 1.0")
+
+        result = MagicMock(returncode=2, stdout="", stderr="bad\n")
+        with patch("dashboard.runtime.shutil.which", return_value="/usr/bin/tool"), patch(
+            "dashboard.runtime.subprocess.run", return_value=result
+        ):
+            payload = runtime._tool_check("tool", ["--version"])
+        self.assertEqual(payload["status"], "warn")
+        self.assertIn("returned 2", payload["message"])
+
+    def test_import_and_ocr_artifact_checks_handle_missing_optional_components(self):
+        self.assertEqual(runtime._import_check("JSON", "json")["status"], "ok")
+        self.assertEqual(runtime._import_check("Missing", "definitely_missing_module")["status"], "warn")
+
+        with patch("dashboard.runtime.importlib.util.find_spec", return_value=None):
+            payload = runtime._rapidocr_artifact_check(runtime.Path("/models"))
+        self.assertEqual(payload["status"], "warn")
+
+        def fake_find_spec(name):
+            if name == "rapidocr":
+                return object()
+            return None
+
+        with patch("dashboard.runtime.importlib.util.find_spec", side_effect=fake_find_spec):
+            payload = runtime._rapidocr_artifact_check(runtime.Path("/models"))
+        self.assertEqual(payload["status"], "fail")
+        self.assertIn("not importable", payload["message"])
+
+        with patch("dashboard.runtime.importlib.util.find_spec", return_value=None):
+            payload = runtime._easyocr_artifact_check(runtime.Path("/models"))
+        self.assertEqual(payload["status"], "warn")
+
+    def test_celery_status_summarizes_broker_and_workers(self):
+        connection = MagicMock()
+        connection.ensure_connection.return_value = None
+
+        class FakeInspect:
+            def ping(self):
+                return {"worker-1": "pong"}
+
+            def stats(self):
+                return {"worker-1": {"pool": {"implementation": "prefork", "max-concurrency": 2}}}
+
+            def active(self):
+                return {"worker-1": ["task"]}
+
+        with patch("dashboard.runtime.current_app.connection", return_value=connection), patch(
+            "dashboard.runtime.current_app.control.inspect", return_value=FakeInspect()
+        ):
+            payload = runtime._celery_status()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["active_tasks"], 1)
+
+        connection.ensure_connection.side_effect = RuntimeError("broker down")
+        with patch("dashboard.runtime.current_app.connection", return_value=connection):
+            payload = runtime._celery_status()
+        self.assertEqual(payload["status"], "fail")
+
+    def test_runtime_payload_uses_cache_and_summary(self):
+        package = {"name": "pkg", "status": "fail", "message": "bad"}
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            with patch("dashboard.runtime._status_package", return_value=package), patch(
+                "dashboard.runtime._tool_check", return_value={"status": "warn"}
+            ), patch(
+                "dashboard.runtime._import_check", return_value={"status": "warn"}
+            ), patch(
+                "dashboard.runtime._docling_base_artifact_check", return_value={"status": "fail"}
+            ), patch(
+                "dashboard.runtime._rapidocr_artifact_check", return_value={"status": "warn"}
+            ), patch(
+                "dashboard.runtime._easyocr_artifact_check", return_value={"status": "warn"}
+            ), patch(
+                "dashboard.runtime._celery_status", return_value={"status": "ok"}
+            ):
+                first = runtime.runtime_diagnostics_payload(force_refresh=True)
+                second = runtime.runtime_diagnostics_payload()
+
+        self.assertIs(first, second)
+        self.assertGreater(first["summary"]["failures"], 0)
+        self.assertTrue(first["warnings"])

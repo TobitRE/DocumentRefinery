@@ -68,7 +68,6 @@ class ArtifactSerializer(serializers.ModelSerializer):
             "id",
             "kind",
             "job_id",
-            "storage_relpath",
             "checksum_sha256",
             "size_bytes",
             "content_type",

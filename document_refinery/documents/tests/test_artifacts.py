@@ -280,3 +280,51 @@ class TestArtifactAccess(TestCase):
             self._auth(self.raw_key_other)
             response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
             self.assertEqual(response.status_code, 404)
+
+    def test_artifact_list_does_not_expose_internal_storage_path(self):
+        Artifact.objects.create(
+            tenant=self.tenant,
+            created_by_key=self.api_key,
+            job=self.job,
+            kind=ArtifactKind.TEXT,
+            storage_relpath=os.path.join(
+                "artifacts", str(self.tenant.id), str(self.job.id), "doc.txt"
+            ),
+            checksum_sha256="c" * 64,
+            size_bytes=5,
+            content_type="text/plain",
+        )
+
+        self._auth(self.raw_key)
+        response = self.client.get("/v1/artifacts/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("storage_relpath", response.data[0])
+
+    def test_artifact_download_and_preview_reject_path_traversal_relpath(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_root = os.path.join(tmpdir, "data")
+            os.makedirs(data_root, exist_ok=True)
+            outside_path = os.path.join(tmpdir, "secret.txt")
+            with open(outside_path, "wb") as handle:
+                handle.write(b"outside data root")
+
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.TEXT,
+                storage_relpath="../secret.txt",
+                checksum_sha256="c" * 64,
+                size_bytes=17,
+                content_type="text/plain",
+            )
+
+            with override_settings(DATA_ROOT=data_root, X_ACCEL_REDIRECT_ENABLED=True):
+                self._auth(self.raw_key)
+                response = self.client.get(f"/v1/artifacts/{artifact.id}/")
+                self.assertEqual(response.status_code, 404)
+                self.assertNotIn("X-Accel-Redirect", response)
+
+                response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+                self.assertEqual(response.status_code, 404)
