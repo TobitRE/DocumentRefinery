@@ -198,6 +198,8 @@ class TestRetentionCleanup(RetentionTestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             relpath = os.path.join("artifacts", str(self.tenant.id), str(job.id), "doc.txt")
             abs_path = self._write_file(tmpdir, relpath)
+            job.status = IngestionJobStatus.SUCCEEDED
+            job.save(update_fields=["status"])
             artifact = Artifact.objects.create(
                 tenant=self.tenant,
                 created_by_key=self.api_key,
@@ -218,6 +220,30 @@ class TestRetentionCleanup(RetentionTestCase):
                 os.path.exists(os.path.join(tmpdir, "artifacts", str(self.tenant.id), str(job.id)))
             )
             self.assertFalse(os.path.exists(os.path.join(tmpdir, "artifacts", str(self.tenant.id))))
+
+    def test_cleanup_expired_artifacts_skips_active_jobs(self):
+        doc = self._make_doc()
+        job = self._make_job(doc, status=IngestionJobStatus.RUNNING)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(job.id), "doc.txt")
+            abs_path = self._write_file(tmpdir, relpath)
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=job,
+                kind=ArtifactKind.TEXT,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=4,
+                expires_at=timezone.now() - timedelta(days=1),
+            )
+
+            result = cleanup_expired_artifacts.apply()
+
+            self.assertEqual(result.result, 0)
+            self.assertTrue(os.path.exists(abs_path))
+            self.assertTrue(Artifact.objects.filter(pk=artifact.pk).exists())
 
     def test_cleanup_expired_documents_removes_files_and_empty_storage_dirs(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):

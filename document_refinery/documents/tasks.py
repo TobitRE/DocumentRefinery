@@ -162,7 +162,9 @@ def _remove_storage_file(relpath: str | None, stop_relpath: str) -> bool:
 @shared_task(bind=True)
 def cleanup_expired_artifacts(self) -> int:
     now = timezone.now()
-    expired_artifacts = Artifact.objects.filter(expires_at__lt=now)
+    expired_artifacts = Artifact.objects.filter(expires_at__lt=now).exclude(
+        job__status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
+    )
     deleted = 0
     for artifact in expired_artifacts:
         _remove_storage_file(artifact.storage_relpath, "artifacts")
@@ -492,6 +494,10 @@ def scan_pdf_task(self, job_id: int) -> int:
     clean_abspath = resolve_data_root_path(clean_relpath)
     os.makedirs(os.path.dirname(clean_abspath), exist_ok=True)
     os.replace(abs_path, clean_abspath)
+    _remove_storage_file(
+        document.storage_relpath_quarantine,
+        os.path.join("uploads", "quarantine"),
+    )
 
     document.status = DocumentStatus.CLEAN
     document.storage_relpath_clean = clean_relpath
