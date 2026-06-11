@@ -139,6 +139,7 @@ class TestPipelineTasks(TestCase):
             doc.refresh_from_db()
             job.refresh_from_db()
             self.assertEqual(doc.status, "INFECTED")
+            self.assertIsNotNone(doc.infected_at)
             self.assertEqual(job.status, IngestionJobStatus.QUARANTINED)
 
     def test_scan_invalid_response_marks_failed(self):

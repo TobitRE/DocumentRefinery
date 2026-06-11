@@ -5,12 +5,30 @@ from .models import APIKey, Tenant
 
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "active", "created_at")
+    list_display = (
+        "name",
+        "slug",
+        "active",
+        "document_retention_days",
+        "artifact_retention_days",
+        "infected_quarantine_retention_days",
+        "created_at",
+    )
     list_filter = ("active",)
     search_fields = ("name", "slug")
     fieldsets = (
         (None, {"fields": ("name", "slug", "active")}),
         ("Docling defaults", {"fields": ("docling_options_json",)}),
+        (
+            "Retention overrides",
+            {
+                "fields": (
+                    "document_retention_days",
+                    "artifact_retention_days",
+                    "infected_quarantine_retention_days",
+                )
+            },
+        ),
     )
 
 

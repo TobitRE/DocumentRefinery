@@ -53,6 +53,12 @@ In another terminal, start a Celery worker:
 ./venv/bin/celery -A config worker --loglevel=INFO
 ```
 
+Run Celery Beat as well when retention cleanup should execute automatically:
+
+```bash
+./venv/bin/celery -A config beat --loglevel=INFO
+```
+
 Minimal upload example:
 
 ```bash
@@ -158,6 +164,9 @@ Expected configuration values:
 - `STATIC_ROOT`
 - `UPLOAD_MAX_SIZE_MB`
 - `MAX_PAGES`
+- `DOCUMENT_RETENTION_DAYS` (default `0`, unlimited)
+- `ARTIFACT_RETENTION_DAYS` (default `0`, unlimited)
+- `INFECTED_QUARANTINE_RETENTION_DAYS` (default `0`, unlimited)
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND` (optional)
 - `CELERY_WORKER_CONCURRENCY`
@@ -169,6 +178,23 @@ Expected configuration values:
 ## References
 
 See `docling_django_task_list.md` for the detailed architecture and task plan.
+
+## Retention
+
+`cleanup_expired_artifacts` and `cleanup_expired_documents` are scheduled hourly through
+`CELERY_BEAT_SCHEDULE`. Start a Celery Beat process in deployments that need automatic cleanup.
+
+`DOCUMENT_RETENTION_DAYS` and `ARTIFACT_RETENTION_DAYS` set the default retention windows used when
+new documents or artifacts are created. A value of `0` keeps records indefinitely by leaving
+`expires_at` empty. Each tenant can override these defaults in Django Admin; a blank tenant value
+falls back to the environment default, and a tenant value of `0` means unlimited for that tenant.
+
+`INFECTED_QUARANTINE_RETENTION_DAYS` controls when quarantine files for documents marked `INFECTED`
+are removed. This cleanup removes the quarantine file and empty storage directories, but keeps the
+document row for audit/history. Tenants can override this setting in Django Admin as well.
+
+Cleanup removes expired artifact files, expired document source/clean files, derived artifact files,
+and now-empty tenant/job storage directories under `DATA_ROOT`.
 
 ## Operational docs
 

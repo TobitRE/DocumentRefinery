@@ -20,7 +20,13 @@ As of January 30, 2026.
 
 ## Retention
 - No delete endpoint initially.
-- Plan for `expires_at` and scheduled cleanup.
+- New documents and artifacts get `expires_at` from environment defaults
+  (`DOCUMENT_RETENTION_DAYS`, `ARTIFACT_RETENTION_DAYS`) with nullable tenant overrides.
+- A value of `0` means unlimited retention and leaves `expires_at` empty.
+- Celery Beat schedules `cleanup_expired_artifacts` and `cleanup_expired_documents` hourly.
+- INFECTED document quarantine files have a separate
+  `INFECTED_QUARANTINE_RETENTION_DAYS` window; cleanup removes the file and empty directories while
+  preserving the document row for audit/history.
 
 ## Scale assumptions
 - Unknown; track basic stats (job counts, sizes, durations) to inform tuning.
