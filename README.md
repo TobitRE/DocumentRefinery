@@ -30,6 +30,23 @@ cp .env.example .env
 ./venv/bin/python document_refinery/manage.py runserver
 ```
 
+## CI
+
+GitHub Actions CI is currently manual-only via `workflow_dispatch`; PR and `main` push triggers are
+temporarily disabled. The workflow contains:
+- Django tests on Python 3.12 after installing `requirements.txt`
+- Ruff lint with a conservative config that only checks syntax-level and undefined-name issues
+- Coverage with `coverage report -m --fail-under=90`
+
+The current test suite does not run Docling conversion against real documents; conversion tests patch
+`documents.tasks._load_docling_converter`. The suite still needs the real `docling` package for
+profile and pipeline option objects used by `documents.profiles` and `documents.docling_options`, so
+CI installs the full `requirements.txt`. `onnxruntime` is not directly imported by the current tests,
+but remains part of the CI install for runtime parity. If a lightweight CI lane without Docling is
+added later, mock at the profile/options boundary (`build_profile_pipeline_options` or
+`build_pdf_pipeline_options_from_dict`) and keep conversion isolated by patching
+`_load_docling_converter`.
+
 In another terminal, start a Celery worker:
 
 ```bash
