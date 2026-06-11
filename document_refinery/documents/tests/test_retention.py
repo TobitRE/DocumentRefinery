@@ -302,6 +302,7 @@ class TestRetentionCleanup(RetentionTestCase):
                 storage_relpath_quarantine=relpath,
                 status=DocumentStatus.INFECTED,
                 infected_at=timezone.now() - timedelta(days=2),
+                expires_at=timezone.now() - timedelta(days=1),
             )
 
             result = cleanup_expired_documents.apply()

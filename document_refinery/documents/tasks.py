@@ -209,7 +209,9 @@ def _cleanup_infected_quarantine_files(now) -> int:
 @shared_task(bind=True)
 def cleanup_expired_documents(self) -> int:
     now = timezone.now()
-    expired_docs = Document.objects.filter(expires_at__lt=now)
+    expired_docs = Document.objects.filter(expires_at__lt=now).exclude(
+        status=DocumentStatus.INFECTED
+    )
     cleaned = 0
     for doc in expired_docs:
         if IngestionJob.objects.filter(
@@ -462,9 +464,8 @@ def scan_pdf_task(self, job_id: int) -> int:
 
     status, reason = results.get(abs_path, ("ERROR", "No scan result"))
     if status == "FOUND":
-        infected_at = timezone.now()
         document.status = DocumentStatus.INFECTED
-        document.infected_at = document.infected_at or infected_at
+        document.infected_at = timezone.now()
         document.save()
         prev_status = job.status
         prev_stage = job.stage
@@ -492,6 +493,7 @@ def scan_pdf_task(self, job_id: int) -> int:
 
     document.status = DocumentStatus.CLEAN
     document.storage_relpath_clean = clean_relpath
+    document.infected_at = None
     document.save()
 
     job.scan_ms = int((time.monotonic() - start) * 1000)

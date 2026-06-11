@@ -94,6 +94,9 @@ class TestPipelineTasks(TestCase):
     def test_scan_marks_clean_and_moves_file(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
+            doc.status = "INFECTED"
+            doc.infected_at = timezone.now() - timezone.timedelta(days=30)
+            doc.save(update_fields=["status", "infected_at"])
             abs_path = doc.get_quarantine_path()
 
             with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
@@ -106,6 +109,7 @@ class TestPipelineTasks(TestCase):
             self.assertTrue(doc.storage_relpath_clean)
             self.assertTrue(doc.storage_relpath_clean.endswith(".pdf"))
             self.assertTrue(os.path.exists(doc.get_clean_path()))
+            self.assertIsNone(doc.infected_at)
             self.assertIsNotNone(job.scan_ms)
 
     def test_scan_preserves_office_extension_when_moving_file(self):
@@ -129,6 +133,9 @@ class TestPipelineTasks(TestCase):
     def test_scan_marks_infected(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
+            old_infected_at = timezone.now() - timezone.timedelta(days=30)
+            doc.infected_at = old_infected_at
+            doc.save(update_fields=["infected_at"])
             abs_path = doc.get_quarantine_path()
 
             with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
@@ -140,6 +147,7 @@ class TestPipelineTasks(TestCase):
             job.refresh_from_db()
             self.assertEqual(doc.status, "INFECTED")
             self.assertIsNotNone(doc.infected_at)
+            self.assertGreater(doc.infected_at, old_infected_at)
             self.assertEqual(job.status, IngestionJobStatus.QUARANTINED)
 
     def test_scan_invalid_response_marks_failed(self):
