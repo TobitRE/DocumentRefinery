@@ -464,8 +464,10 @@ def scan_pdf_task(self, job_id: int) -> int:
 
     status, reason = results.get(abs_path, ("ERROR", "No scan result"))
     if status == "FOUND":
+        _remove_storage_file(document.storage_relpath_clean, os.path.join("uploads", "clean"))
         document.status = DocumentStatus.INFECTED
         document.infected_at = timezone.now()
+        document.storage_relpath_clean = None
         document.save()
         prev_status = job.status
         prev_stage = job.stage

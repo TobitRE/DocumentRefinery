@@ -134,8 +134,14 @@ class TestPipelineTasks(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
             old_infected_at = timezone.now() - timezone.timedelta(days=30)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_path = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_path), exist_ok=True)
+            with open(clean_path, "wb") as handle:
+                handle.write(b"old clean copy")
+            doc.storage_relpath_clean = clean_relpath
             doc.infected_at = old_infected_at
-            doc.save(update_fields=["infected_at"])
+            doc.save(update_fields=["storage_relpath_clean", "infected_at"])
             abs_path = doc.get_quarantine_path()
 
             with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
@@ -148,6 +154,8 @@ class TestPipelineTasks(TestCase):
             self.assertEqual(doc.status, "INFECTED")
             self.assertIsNotNone(doc.infected_at)
             self.assertGreater(doc.infected_at, old_infected_at)
+            self.assertIsNone(doc.storage_relpath_clean)
+            self.assertFalse(os.path.exists(clean_path))
             self.assertEqual(job.status, IngestionJobStatus.QUARANTINED)
 
     def test_scan_invalid_response_marks_failed(self):
