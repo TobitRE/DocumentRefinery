@@ -689,12 +689,17 @@ def ingest_document_for_api_key(
 
     if mode == "reuse_existing":
         existing_job = jobs.filter(
-            status__in=(
-                IngestionJobStatus.QUEUED,
-                IngestionJobStatus.RUNNING,
-                IngestionJobStatus.SUCCEEDED,
-            )
+            status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
         ).first()
+        if not existing_job:
+            existing_job = (
+                jobs.filter(
+                    status=IngestionJobStatus.SUCCEEDED,
+                    artifacts__isnull=False,
+                )
+                .distinct()
+                .first()
+            )
         if existing_job:
             return Response(
                 _ingest_job_payload(

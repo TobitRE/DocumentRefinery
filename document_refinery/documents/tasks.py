@@ -491,6 +491,8 @@ def scan_pdf_task(self, job_id: int) -> int:
         _remove_storage_file(document.storage_relpath_clean, os.path.join("uploads", "clean"))
         document.status = DocumentStatus.INFECTED
         document.infected_at = timezone.now()
+        if job.source_relpath:
+            document.storage_relpath_quarantine = job.source_relpath
         document.storage_relpath_clean = None
         document.save()
         prev_status = job.status

@@ -182,6 +182,29 @@ class TestPipelineTasks(TestCase):
             self.assertFalse(os.path.exists(clean_path))
             self.assertEqual(job.status, IngestionJobStatus.QUARANTINED)
 
+    def test_scan_infected_source_copy_becomes_document_quarantine_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            source_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "jobs", f"{doc.uuid}.pdf"
+            )
+            source_path = os.path.join(tmpdir, source_relpath)
+            os.makedirs(os.path.dirname(source_path), exist_ok=True)
+            with open(source_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 copied source\n")
+            job.source_relpath = source_relpath
+            job.save(update_fields=["source_relpath"])
+
+            with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
+                mock_scan.return_value = {source_path: ("FOUND", "Eicar-Test-Signature")}
+                with self.assertRaises(RuntimeError):
+                    scan_pdf_task(job.id)
+
+            doc.refresh_from_db()
+            self.assertEqual(doc.status, "INFECTED")
+            self.assertEqual(doc.storage_relpath_quarantine, source_relpath)
+            self.assertTrue(os.path.exists(doc.get_quarantine_path()))
+
     def test_scan_invalid_response_marks_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
