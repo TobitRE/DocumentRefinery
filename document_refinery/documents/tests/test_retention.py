@@ -325,6 +325,46 @@ class TestRetentionCleanup(RetentionTestCase):
                 os.path.exists(os.path.join(tmpdir, "uploads", "quarantine", str(self.tenant.id)))
             )
 
+    def test_cleanup_infected_quarantine_removes_failed_job_source_copy(self):
+        self.tenant.infected_quarantine_retention_days = 1
+        self.tenant.save(update_fields=["infected_quarantine_retention_days"])
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            original_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "original.pdf"
+            )
+            failed_source_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "jobs", "failed-source.pdf"
+            )
+            running_source_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "jobs", "running-source.pdf"
+            )
+            self._write_file(tmpdir, original_relpath)
+            failed_source_path = self._write_file(tmpdir, failed_source_relpath)
+            running_source_path = self._write_file(tmpdir, running_source_relpath)
+            doc = self._make_doc(
+                storage_relpath_quarantine=original_relpath,
+                status=DocumentStatus.INFECTED,
+                infected_at=timezone.now() - timedelta(days=2),
+            )
+            self._make_job(
+                doc,
+                status=IngestionJobStatus.FAILED,
+                source_relpath=failed_source_relpath,
+            )
+            self._make_job(
+                doc,
+                status=IngestionJobStatus.RUNNING,
+                source_relpath=running_source_relpath,
+            )
+
+            result = cleanup_expired_documents.apply()
+
+            self.assertEqual(result.result, 2)
+            self.assertTrue(Document.objects.filter(pk=doc.pk).exists())
+            self.assertFalse(os.path.exists(failed_source_path))
+            self.assertTrue(os.path.exists(running_source_path))
+
     def test_cleanup_infected_quarantine_keeps_files_when_unlimited(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(
             DATA_ROOT=tmpdir,

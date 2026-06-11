@@ -185,7 +185,12 @@ def _cleanup_infected_quarantine_files(now) -> int:
         relpaths.extend(
             IngestionJob.objects.filter(
                 document=doc,
-                status=IngestionJobStatus.QUARANTINED,
+                status__in=(
+                    IngestionJobStatus.QUARANTINED,
+                    IngestionJobStatus.FAILED,
+                    IngestionJobStatus.CANCELED,
+                    IngestionJobStatus.SUCCEEDED,
+                ),
             )
             .exclude(source_relpath__isnull=True)
             .exclude(source_relpath="")
