@@ -16,6 +16,17 @@ from .profiles import (
 
 ALLOWED_EXPORTS = ("markdown", "text", "doctags", "chunks_json", "figures_zip")
 ALWAYS_GENERATED_EXPORTS = ("docling_json",)
+ALLOWED_CHUNKS_FORMATS = ("hybrid", "doctags_compat")
+DEFAULT_CHUNKS_FORMAT = "hybrid"
+DEFAULT_HUGGINGFACE_CHUNK_TOKENIZER = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_CHUNKING_OPTIONS = {
+    "tokenizer": "simple",
+    "max_tokens": 512,
+    "repeat_table_header": True,
+    "merge_peers": True,
+    "omit_header_on_overflow": False,
+    "always_emit_headings": False,
+}
 KNOWN_OCR_ENGINES = ("auto", "rapidocr", "easyocr", "tesseract", "tesseract_cli", "mac")
 DEFAULT_ALLOWED_OCR_ENGINES = ("auto", "rapidocr")
 OCR_ENGINES = KNOWN_OCR_ENGINES
@@ -23,6 +34,8 @@ STRUCTURED_OPTION_KEYS = {
     "max_num_pages",
     "max_file_size",
     "exports",
+    "chunks_format",
+    "chunking",
     "do_ocr",
     "ocr",
     "ocr_engine",
@@ -72,6 +85,19 @@ DOC_OPTION_SCHEMA = (
     {"key": "generate_picture_images", "type": "boolean"},
     {"key": "images_scale", "type": "number", "minimum": 0},
     {"key": "exports", "type": "choice_list", "choices": list(ALLOWED_EXPORTS)},
+    {"key": "chunks_format", "type": "choice", "choices": list(ALLOWED_CHUNKS_FORMATS)},
+    {
+        "key": "chunking",
+        "type": "object",
+        "properties": [
+            {"key": "tokenizer", "type": "string_or_object"},
+            {"key": "max_tokens", "type": "integer", "minimum": 1},
+            {"key": "repeat_table_header", "type": "boolean"},
+            {"key": "merge_peers", "type": "boolean"},
+            {"key": "omit_header_on_overflow", "type": "boolean"},
+            {"key": "always_emit_headings", "type": "boolean"},
+        ],
+    },
 )
 
 
@@ -82,6 +108,12 @@ def allowed_ocr_engines() -> tuple[str, ...]:
         return DEFAULT_ALLOWED_OCR_ENGINES
     allowed = [item for item in values if item in KNOWN_OCR_ENGINES]
     return tuple(dict.fromkeys(allowed)) or DEFAULT_ALLOWED_OCR_ENGINES
+
+
+def allowed_chunk_tokenizers() -> tuple[str, ...]:
+    raw_value = getattr(settings, "DOCLING_ALLOWED_CHUNK_TOKENIZERS", "") or ""
+    values = [item.strip() for item in str(raw_value).split(",") if item.strip()]
+    return tuple(dict.fromkeys(values))
 
 
 def _require_allowed_ocr_engine(key: str, value: Any) -> None:
@@ -96,6 +128,24 @@ def _require_allowed_ocr_engine(key: str, value: Any) -> None:
             + ", ".join(allowed)
             + "."
         )
+
+
+def _normalize_huggingface_chunk_tokenizer_name(value: str) -> str:
+    model_name = value.strip()
+    if model_name in ("default", "huggingface_default"):
+        model_name = DEFAULT_HUGGINGFACE_CHUNK_TOKENIZER
+    allowed = allowed_chunk_tokenizers()
+    if model_name not in allowed:
+        suffix = (
+            " Enabled Hugging Face tokenizers: " + ", ".join(allowed) + "."
+            if allowed
+            else " No Hugging Face tokenizers are enabled for per-request use."
+        )
+        raise ValidationError(
+            "chunking.tokenizer must be 'simple' or an enabled local Hugging Face tokenizer."
+            + suffix
+        )
+    return model_name
 
 
 def _merge_dicts(base: dict[str, Any], incoming: dict[str, Any] | None) -> dict[str, Any]:
@@ -114,8 +164,13 @@ def _require_bool(key: str, value: Any) -> None:
 
 
 def _require_non_negative_int(key: str, value: Any) -> None:
-    if not isinstance(value, int) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValidationError(f"{key} must be a non-negative integer.")
+
+
+def _require_positive_int(key: str, value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValidationError(f"{key} must be a positive integer.")
 
 
 def _require_string_list(key: str, value: Any) -> None:
@@ -126,6 +181,90 @@ def _require_string_list(key: str, value: Any) -> None:
 def _require_non_negative_number(key: str, value: Any) -> None:
     if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
         raise ValidationError(f"{key} must be a non-negative number.")
+
+
+def _normalize_chunk_tokenizer(value: Any) -> Any:
+    if isinstance(value, str):
+        tokenizer_name = value.strip()
+        if not tokenizer_name:
+            raise ValidationError("chunking.tokenizer must not be empty.")
+        if tokenizer_name in ("simple", "regex"):
+            return tokenizer_name
+        return _normalize_huggingface_chunk_tokenizer_name(tokenizer_name)
+    if not isinstance(value, dict):
+        raise ValidationError("chunking.tokenizer must be a string or JSON object.")
+
+    normalized = deepcopy(value)
+    kind = normalized.get("kind", "huggingface")
+    if kind not in ("simple", "huggingface"):
+        raise ValidationError("chunking.tokenizer.kind must be one of: simple, huggingface.")
+    normalized["kind"] = kind
+
+    if kind == "simple":
+        unsupported = sorted(set(normalized) - {"kind"})
+        if unsupported:
+            raise ValidationError(
+                "Unsupported chunking.tokenizer options for simple tokenizer: "
+                + ", ".join(unsupported)
+                + "."
+            )
+        return normalized
+
+    model_name = normalized.get("model_name")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValidationError("chunking.tokenizer.model_name must be a non-empty string.")
+    normalized["model_name"] = _normalize_huggingface_chunk_tokenizer_name(model_name)
+    for key in ("local_files_only", "trust_remote_code"):
+        if key in normalized:
+            _require_bool(f"chunking.tokenizer.{key}", normalized[key])
+    if normalized.get("trust_remote_code") is True:
+        raise ValidationError("chunking.tokenizer.trust_remote_code is not supported.")
+    if normalized.get("local_files_only") is False:
+        raise ValidationError("chunking.tokenizer.local_files_only must be true.")
+    normalized["local_files_only"] = True
+    unsupported = sorted(
+        set(normalized)
+        - {"kind", "model_name", "local_files_only", "trust_remote_code", "revision"}
+    )
+    if unsupported:
+        raise ValidationError(
+            "Unsupported chunking.tokenizer options: " + ", ".join(unsupported) + "."
+        )
+    if "revision" in normalized and not isinstance(normalized["revision"], str):
+        raise ValidationError("chunking.tokenizer.revision must be a string.")
+    return normalized
+
+
+def _normalize_chunking_options(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError("chunking must be a JSON object.")
+    normalized = deepcopy(value)
+    allowed = {
+        "tokenizer",
+        "max_tokens",
+        "repeat_table_header",
+        "merge_peers",
+        "omit_header_on_overflow",
+        "always_emit_headings",
+    }
+    unsupported = sorted(set(normalized) - allowed)
+    if unsupported:
+        raise ValidationError(
+            "Unsupported chunking options: " + ", ".join(unsupported) + "."
+        )
+    if "tokenizer" in normalized:
+        normalized["tokenizer"] = _normalize_chunk_tokenizer(normalized["tokenizer"])
+    if "max_tokens" in normalized:
+        _require_positive_int("chunking.max_tokens", normalized["max_tokens"])
+    for key in (
+        "repeat_table_header",
+        "merge_peers",
+        "omit_header_on_overflow",
+        "always_emit_headings",
+    ):
+        if key in normalized:
+            _require_bool(f"chunking.{key}", normalized[key])
+    return normalized
 
 
 def normalize_docling_options(options: dict | None) -> tuple[dict, list[str]]:
@@ -160,6 +299,15 @@ def normalize_docling_options(options: dict | None) -> tuple[dict, list[str]]:
                     + ", ".join(ALLOWED_EXPORTS)
                     + "."
                 )
+        elif key == "chunks_format":
+            if not isinstance(value, str) or value not in ALLOWED_CHUNKS_FORMATS:
+                raise ValidationError(
+                    "chunks_format must be one of: "
+                    + ", ".join(ALLOWED_CHUNKS_FORMATS)
+                    + "."
+                )
+        elif key == "chunking":
+            normalized[key] = _normalize_chunking_options(value)
         elif key in ("do_ocr", "ocr", "force_full_page_ocr", "do_table_structure"):
             _require_bool(key, value)
         elif key in ("generate_parsed_pages", "generate_picture_images"):
@@ -201,6 +349,11 @@ def normalize_docling_options(options: dict | None) -> tuple[dict, list[str]]:
         if "force_full_page_ocr" not in ocr_options:
             ocr_options["force_full_page_ocr"] = normalized["force_full_page_ocr"]
         normalized["ocr_options"] = ocr_options
+    if (
+        "chunks_format" not in normalized
+        and "chunks_json" in (normalized.get("exports") or [])
+    ):
+        normalized["chunks_format"] = DEFAULT_CHUNKS_FORMAT
 
     return normalized, warnings
 
@@ -267,6 +420,10 @@ def apply_profile_overrides(options: dict | None, profile: str | None) -> dict:
     exports = definition.get("exports")
     if exports:
         merged["exports"] = list(exports)
+    chunking_options = definition.get("chunking_options")
+    if chunking_options:
+        existing = merged.get("chunking") if isinstance(merged.get("chunking"), dict) else {}
+        merged["chunking"] = _merge_dicts(chunking_options, existing)
     return merged
 
 
@@ -339,7 +496,10 @@ def capabilities_payload() -> dict[str, Any]:
             "always_generated": list(ALWAYS_GENERATED_EXPORTS),
             "selectable": list(ALLOWED_EXPORTS),
             "notes": {
-                "chunks_json": "Compatibility payload containing DocTags, not real chunking yet.",
+                "chunks_json": (
+                    "HybridChunker JSON array by default; set chunks_format="
+                    "'doctags_compat' for the legacy DocTags compatibility object."
+                ),
                 "figures_zip": "ZIP download and metadata only; may be empty.",
             },
         },
@@ -354,10 +514,11 @@ def capabilities_payload() -> dict[str, Any]:
                 "markdown",
                 "text",
                 "doctags",
+                "real_chunking",
                 "figures_zip",
                 "runtime_diagnostics",
             ],
-            "planned": ["real_chunking", "vlm_pipeline"],
+            "planned": ["vlm_pipeline"],
             "not_offered": ["remote_services", "external_plugins", "asr_audio_video"],
         },
     }

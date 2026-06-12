@@ -6,6 +6,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import time
 import traceback
 import urllib.error
@@ -22,6 +23,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from clamav_client import clamd
+from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer
 from docling_core.types.doc import DoclingDocument
 
 from .models import (
@@ -38,7 +40,11 @@ from .models import (
     WebhookEndpoint,
 )
 from .docling_options import (
+    DEFAULT_CHUNKING_OPTIONS,
+    DEFAULT_CHUNKS_FORMAT,
+    DEFAULT_HUGGINGFACE_CHUNK_TOKENIZER,
     build_pdf_pipeline_options,
+    normalize_docling_options,
     validate_docling_options_for_input_format,
     validate_docling_options_payload,
 )
@@ -48,6 +54,7 @@ from .retention import artifact_expires_at, infected_quarantine_retention_days
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
 DOCLING_UNLIMITED = 9223372036854775807
+CHUNK_TOKEN_PATTERN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 DocumentConverter = None
 PdfFormatOption = None
@@ -55,6 +62,19 @@ WordFormatOption = None
 PowerpointFormatOption = None
 ExcelFormatOption = None
 InputFormat = None
+
+
+class SimpleChunkTokenizer(BaseTokenizer):
+    max_tokens: int
+
+    def count_tokens(self, text: str) -> int:
+        return len(CHUNK_TOKEN_PATTERN.findall(text or ""))
+
+    def get_max_tokens(self) -> int:
+        return self.max_tokens
+
+    def get_tokenizer(self):
+        return self.count_tokens
 
 
 def _load_docling_converter():
@@ -108,6 +128,7 @@ def start_ingestion_pipeline(job_id: int):
         scan_document_task.s(job_id),
         docling_convert_task.s(),
         export_artifacts_task.s(),
+        chunk_artifacts_task.s(),
         finalize_job_task.s(),
     ).apply_async(queue=settings.CELERY_DEFAULT_QUEUE)
     try:
@@ -418,6 +439,161 @@ def _count_items(value) -> int | None:
         return None
 
 
+def _enum_or_value(value):
+    return getattr(value, "value", value)
+
+
+def _chunking_options(options: dict | None) -> dict:
+    normalized, _warnings = normalize_docling_options(options or {})
+    chunking = dict(DEFAULT_CHUNKING_OPTIONS)
+    configured = normalized.get("chunking")
+    if isinstance(configured, dict):
+        chunking.update(configured)
+    return chunking
+
+
+def _chunks_format(options: dict | None) -> str:
+    normalized, _warnings = normalize_docling_options(options or {})
+    return normalized.get("chunks_format") or DEFAULT_CHUNKS_FORMAT
+
+
+def _build_chunk_tokenizer(tokenizer_config, max_tokens: int):
+    if isinstance(tokenizer_config, str):
+        tokenizer_name = tokenizer_config.strip()
+        if tokenizer_name in ("simple", "regex"):
+            return SimpleChunkTokenizer(max_tokens=max_tokens)
+        if tokenizer_name in ("default", "huggingface_default"):
+            tokenizer_name = DEFAULT_HUGGINGFACE_CHUNK_TOKENIZER
+        from docling_core.transforms.chunker.tokenizer.huggingface import (
+            HuggingFaceTokenizer,
+        )
+
+        return HuggingFaceTokenizer.from_pretrained(
+            model_name=tokenizer_name,
+            max_tokens=max_tokens,
+            local_files_only=True,
+        )
+
+    tokenizer_config = dict(tokenizer_config or {})
+    kind = tokenizer_config.get("kind", "huggingface")
+    if kind == "simple":
+        return SimpleChunkTokenizer(max_tokens=max_tokens)
+
+    from docling_core.transforms.chunker.tokenizer.huggingface import (
+        HuggingFaceTokenizer,
+    )
+
+    model_name = tokenizer_config.get("model_name") or DEFAULT_HUGGINGFACE_CHUNK_TOKENIZER
+    kwargs = {
+        key: tokenizer_config[key]
+        for key in ("local_files_only", "revision")
+        if key in tokenizer_config
+    }
+    kwargs["local_files_only"] = True
+    return HuggingFaceTokenizer.from_pretrained(
+        model_name=model_name,
+        max_tokens=max_tokens,
+        **kwargs,
+    )
+
+
+def _build_hybrid_chunker(options: dict | None):
+    from docling.chunking import HybridChunker
+
+    chunking = _chunking_options(options)
+    max_tokens = chunking["max_tokens"]
+    tokenizer = _build_chunk_tokenizer(chunking["tokenizer"], max_tokens)
+    return HybridChunker(
+        tokenizer=tokenizer,
+        repeat_table_header=chunking["repeat_table_header"],
+        merge_peers=chunking["merge_peers"],
+        omit_header_on_overflow=chunking["omit_header_on_overflow"],
+        always_emit_headings=chunking["always_emit_headings"],
+    )
+
+
+def _bbox_payload(bbox) -> dict | None:
+    if bbox is None:
+        return None
+    if hasattr(bbox, "model_dump"):
+        try:
+            return bbox.model_dump(mode="json")
+        except TypeError:
+            return bbox.model_dump()
+    payload = {
+        key: getattr(bbox, key)
+        for key in ("l", "t", "r", "b")
+        if getattr(bbox, key, None) is not None
+    }
+    coord_origin = getattr(bbox, "coord_origin", None)
+    if coord_origin is not None:
+        payload["coord_origin"] = _enum_or_value(coord_origin)
+    return payload or None
+
+
+def _doc_item_payload(item, item_pages: set[int]) -> dict:
+    payload = {}
+    self_ref = getattr(item, "self_ref", None)
+    label = getattr(item, "label", None)
+    if self_ref:
+        payload["self_ref"] = str(self_ref)
+    if label is not None:
+        payload["label"] = str(_enum_or_value(label))
+    if item_pages:
+        payload["pages"] = sorted(item_pages)
+    return payload
+
+
+def _chunk_payload(chunk) -> dict:
+    meta = getattr(chunk, "meta", None)
+    pages: set[int] = set()
+    bounding_boxes = []
+    doc_items = []
+
+    for item in getattr(meta, "doc_items", []) or []:
+        item_pages: set[int] = set()
+        for prov in getattr(item, "prov", []) or []:
+            page_no = getattr(prov, "page_no", None)
+            if page_no is not None:
+                pages.add(page_no)
+                item_pages.add(page_no)
+            bbox = _bbox_payload(getattr(prov, "bbox", None))
+            if bbox:
+                box = {"bbox": bbox}
+                if page_no is not None:
+                    box["page"] = page_no
+                self_ref = getattr(item, "self_ref", None)
+                if self_ref:
+                    box["doc_item"] = str(self_ref)
+                charspan = getattr(prov, "charspan", None)
+                if charspan is not None:
+                    box["charspan"] = list(charspan)
+                bounding_boxes.append(box)
+        doc_item = _doc_item_payload(item, item_pages)
+        if doc_item:
+            doc_items.append(doc_item)
+
+    chunk_meta = {
+        "pages": sorted(pages),
+        "headings": list(getattr(meta, "headings", None) or []),
+        "bounding_boxes": bounding_boxes,
+        "doc_items": doc_items,
+    }
+    origin = getattr(meta, "origin", None)
+    if origin is not None:
+        chunk_meta["origin"] = _json_safe(origin)
+
+    return {
+        "text": getattr(chunk, "text", "") or "",
+        "meta": chunk_meta,
+    }
+
+
+def _build_hybrid_chunks_payload(docling_doc: DoclingDocument, options: dict | None) -> list[dict]:
+    chunker = _build_hybrid_chunker(options)
+    return [_chunk_payload(chunk) for chunk in chunker.chunk(dl_doc=docling_doc)]
+
+
 def _docling_document_metrics(docling_doc: DoclingDocument) -> dict:
     try:
         text = docling_doc.export_to_text()
@@ -429,7 +605,7 @@ def _docling_document_metrics(docling_doc: DoclingDocument) -> dict:
         "table_count": _count_items(getattr(docling_doc, "tables", None)) or 0,
         "picture_count": _count_items(getattr(docling_doc, "pictures", None)) or 0,
         "text_length": text_length,
-        "chunks_json_kind": "doctags_compatibility_payload",
+        "chunks_json_kind": None,
     }
 
 
@@ -714,20 +890,6 @@ def export_artifacts_task(self, job_id: int) -> int:
                 doctags.encode("utf-8"),
                 "text/plain",
             )
-        if "chunks_json" in exports:
-            doctags = docling_doc.export_to_doctags()
-            payload = json.dumps(
-                {"format": "doctags", "content": doctags},
-                ensure_ascii=False,
-                indent=2,
-            ).encode("utf-8")
-            _write_artifact(
-                job,
-                ArtifactKind.CHUNKS_JSON,
-                _artifact_relpath(job, "chunks.json"),
-                payload,
-                "application/json",
-            )
         if "figures_zip" in exports:
             payload = _build_figures_zip(docling_doc)
             _write_artifact(
@@ -743,6 +905,95 @@ def export_artifacts_task(self, job_id: int) -> int:
 
     job.export_ms = int((time.monotonic() - start) * 1000)
     job.save()
+    return job_id
+
+
+@shared_task(bind=True)
+def chunk_artifacts_task(self, job_id: int) -> int:
+    job = IngestionJob.objects.select_related("document").get(pk=job_id)
+    if _is_canceled(job):
+        return job_id
+    prev_status = job.status
+    prev_stage = job.stage
+    job.stage = IngestionStage.CHUNKING
+    job.status = IngestionJobStatus.RUNNING
+    if self.request.id:
+        job.celery_task_id = self.request.id
+    job.save()
+    queue_job_webhooks(job, prev_status, prev_stage)
+
+    start = time.monotonic()
+    try:
+        validate_docling_options_payload(job.options_json or {})
+    except ValidationError as exc:
+        job.chunk_ms = int((time.monotonic() - start) * 1000)
+        job.save(update_fields=["chunk_ms"])
+        message = _validation_message(exc)
+        _mark_failed(
+            job,
+            "INVALID_OPTIONS",
+            message,
+            {"options_json": job.options_json or {}},
+        )
+        raise RuntimeError(message)
+
+    exports = job.options_json.get("exports") if job.options_json else None
+    if exports is None:
+        exports = ["markdown", "text", "doctags"]
+    if "chunks_json" not in exports:
+        job.chunk_ms = int((time.monotonic() - start) * 1000)
+        job.save(update_fields=["chunk_ms"])
+        return job_id
+
+    relpath = _artifact_relpath(job, "docling.json")
+    abs_path = Path(settings.DATA_ROOT) / relpath
+
+    try:
+        with open(abs_path, "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8"))
+        docling_doc = DoclingDocument.model_validate(data)
+    except Exception as exc:
+        job.chunk_ms = int((time.monotonic() - start) * 1000)
+        job.save(update_fields=["chunk_ms"])
+        _mark_failed(job, "DOCLING_LOAD_FAILED", str(exc), _traceback_details())
+        raise
+
+    chunks_format = _chunks_format(job.options_json or {})
+    try:
+        if chunks_format == "doctags_compat":
+            doctags = docling_doc.export_to_doctags()
+            payload_data = {"format": "doctags", "content": doctags}
+            chunk_count = None
+            chunks_json_kind = "doctags_compatibility_payload"
+        else:
+            payload_data = _build_hybrid_chunks_payload(docling_doc, job.options_json or {})
+            chunk_count = len(payload_data)
+            chunks_json_kind = "hybrid_chunker"
+        payload = json.dumps(
+            payload_data,
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        _write_artifact(
+            job,
+            ArtifactKind.CHUNKS_JSON,
+            _artifact_relpath(job, "chunks.json"),
+            payload,
+            "application/json",
+        )
+    except Exception as exc:
+        job.chunk_ms = int((time.monotonic() - start) * 1000)
+        job.save(update_fields=["chunk_ms"])
+        _mark_failed(job, "DOCLING_CHUNK_FAILED", str(exc), _traceback_details())
+        raise
+
+    metrics = dict(job.result_metrics_json or {})
+    metrics["chunks_json_kind"] = chunks_json_kind
+    if chunk_count is not None:
+        metrics["chunk_count"] = chunk_count
+    job.result_metrics_json = metrics
+    job.chunk_ms = int((time.monotonic() - start) * 1000)
+    job.save(update_fields=["result_metrics_json", "chunk_ms"])
     return job_id
 
 

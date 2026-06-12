@@ -248,8 +248,28 @@ def _ingest_job_payload(
     }
 
 
-def _options_match_job_snapshot(job_options: dict | None, effective_options: dict, profile: str | None) -> bool:
-    job_options = job_options or {}
+def _expected_chunks_json_kind(effective_options: dict) -> str:
+    if effective_options.get("chunks_format") == "doctags_compat":
+        return "doctags_compatibility_payload"
+    return "hybrid_chunker"
+
+
+def _options_match_job_snapshot(
+    job: IngestionJob,
+    effective_options: dict,
+    profile: str | None,
+    *,
+    require_chunks_format_marker: bool = False,
+) -> bool:
+    job_options = job.options_json or {}
+    effective_exports = effective_options.get("exports") if isinstance(effective_options, dict) else []
+    if require_chunks_format_marker and "chunks_json" in (effective_exports or []):
+        if job.status == IngestionJobStatus.SUCCEEDED:
+            metrics = job.result_metrics_json if isinstance(job.result_metrics_json, dict) else {}
+            if metrics.get("chunks_json_kind") != _expected_chunks_json_kind(effective_options):
+                return False
+        elif "chunks_format" not in job_options:
+            return False
     if job_options == (effective_options or {}):
         return True
     if not profile:
@@ -262,7 +282,13 @@ def _options_match_job_snapshot(job_options: dict | None, effective_options: dic
     return legacy_effective == (effective_options or {})
 
 
-def _matching_jobs(document: Document, profile: str | None, options_json: dict):
+def _matching_jobs(
+    document: Document,
+    profile: str | None,
+    options_json: dict,
+    *,
+    require_chunks_format_marker: bool = False,
+):
     candidates = IngestionJob.objects.filter(
         tenant=document.tenant,
         document=document,
@@ -271,7 +297,12 @@ def _matching_jobs(document: Document, profile: str | None, options_json: dict):
     compatible_ids = [
         job.id
         for job in candidates
-        if _options_match_job_snapshot(job.options_json, options_json or {}, profile)
+        if _options_match_job_snapshot(
+            job,
+            options_json or {},
+            profile,
+            require_chunks_format_marker=require_chunks_format_marker,
+        )
     ]
     return candidates.filter(id__in=compatible_ids)
 
@@ -402,6 +433,7 @@ def _retry_snapshot(job: IngestionJob) -> dict[str, object]:
         "celery_task_id": job.celery_task_id,
         "worker_hostname": job.worker_hostname,
         "source_relpath": job.source_relpath,
+        "options_json": job.options_json,
     }
 
 
@@ -416,6 +448,7 @@ def _retry_job(
     *,
     source_relpath: str | None = None,
     source_abs_path: str | None = None,
+    options_json: dict | None = None,
     dashboard_action_user=None,
 ) -> Response:
     if job.status not in (IngestionJobStatus.FAILED, IngestionJobStatus.QUARANTINED):
@@ -441,6 +474,8 @@ def _retry_job(
         stashed_artifacts = _stash_job_artifacts_for_retry(job)
         if source_relpath is not None:
             job.source_relpath = source_relpath
+        if options_json is not None:
+            job.options_json = options_json
         job.attempt += 1
         job.status = IngestionJobStatus.QUEUED
         job.stage = IngestionStage.SCANNING
@@ -686,7 +721,12 @@ def ingest_document_for_api_key(
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    jobs = _matching_jobs(document, profile, options_json)
+    jobs = _matching_jobs(
+        document,
+        profile,
+        options_json,
+        require_chunks_format_marker=mode == "reuse_existing",
+    )
 
     if mode == "reuse_existing":
         existing_job = jobs.filter(
@@ -739,6 +779,7 @@ def ingest_document_for_api_key(
             retry_job,
             source_relpath=source[0],
             source_abs_path=source[1],
+            options_json=options_json,
             dashboard_action_user=created_by_user
             if created_via == CreationSource.DASHBOARD
             else None,
@@ -992,13 +1033,17 @@ def preview_artifact_for_api_key(api_key, artifact_id) -> Response:
     payload["truncated"] = truncated
 
     if artifact.kind in (ArtifactKind.DOCLING_JSON, ArtifactKind.CHUNKS_JSON):
-        if artifact.kind == ArtifactKind.CHUNKS_JSON:
-            payload["compatibility_note"] = (
-                "DocTags compatibility payload, not real chunking yet."
-            )
         if not truncated:
             try:
-                payload.update({"preview_type": "json", "json": json.loads(text)})
+                parsed_json = json.loads(text)
+                if artifact.kind == ArtifactKind.CHUNKS_JSON:
+                    if isinstance(parsed_json, dict) and parsed_json.get("format") == "doctags":
+                        payload["compatibility_note"] = (
+                            "Legacy DocTags compatibility payload."
+                        )
+                    elif isinstance(parsed_json, list):
+                        payload["compatibility_note"] = "HybridChunker chunks payload."
+                payload.update({"preview_type": "json", "json": parsed_json})
                 return Response(payload)
             except json.JSONDecodeError:
                 pass

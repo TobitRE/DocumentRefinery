@@ -190,7 +190,7 @@ class TestArtifactAccess(TestCase):
             self.assertEqual(response.data["preview_type"], "json")
             self.assertEqual(response.data["json"], {"pages": 1})
 
-    def test_chunks_preview_marks_compatibility_payload(self):
+    def test_chunks_preview_marks_legacy_compatibility_payload(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "chunks.json")
             abs_path = os.path.join(tmpdir, relpath)
@@ -211,7 +211,32 @@ class TestArtifactAccess(TestCase):
             response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.data["preview_type"], "json")
-            self.assertIn("not real chunking", response.data["compatibility_note"])
+            self.assertIn("Legacy DocTags", response.data["compatibility_note"])
+
+    def test_chunks_preview_marks_hybrid_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            relpath = os.path.join("artifacts", str(self.tenant.id), str(self.job.id), "chunks.json")
+            abs_path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            with open(abs_path, "wb") as handle:
+                handle.write(
+                    json.dumps([{"text": "chunk", "meta": {"pages": [1]}}]).encode("utf-8")
+                )
+            artifact = Artifact.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                job=self.job,
+                kind=ArtifactKind.CHUNKS_JSON,
+                storage_relpath=relpath,
+                checksum_sha256="c" * 64,
+                size_bytes=36,
+                content_type="application/json",
+            )
+            self._auth(self.raw_key)
+            response = self.client.get(f"/v1/artifacts/{artifact.id}/preview/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["preview_type"], "json")
+            self.assertIn("HybridChunker", response.data["compatibility_note"])
 
     def test_zip_preview_returns_metadata_only(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):

@@ -4,6 +4,7 @@ import os
 import tempfile
 import zipfile
 from enum import Enum
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
@@ -22,6 +23,7 @@ from documents.docling_options import (
 from documents.profiles import PROFILE_NAMES, build_profile_pipeline_options
 from documents.tasks import (
     DOCLING_UNLIMITED,
+    chunk_artifacts_task,
     docling_convert_task,
     export_artifacts_task,
     scan_pdf_task,
@@ -406,7 +408,7 @@ class TestPipelineTasks(TestCase):
             self.assertEqual(captured["kwargs"]["max_num_pages"], DOCLING_UNLIMITED)
             self.assertEqual(captured["kwargs"]["max_file_size"], DOCLING_UNLIMITED)
 
-    def test_export_artifacts_writes_chunks_and_figures(self):
+    def test_export_and_chunk_artifacts_writes_hybrid_chunks_and_figures(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
             clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
@@ -452,6 +454,24 @@ class TestPipelineTasks(TestCase):
                 docling_convert_task(job.id)
 
             export_artifacts_task(job.id)
+            bbox = SimpleNamespace(l=1.0, t=2.0, r=3.0, b=4.0, coord_origin="TOPLEFT")
+            prov = SimpleNamespace(page_no=2, bbox=bbox, charspan=(0, 8))
+            item = SimpleNamespace(self_ref="#/texts/0", label="text", prov=[prov])
+            chunk = SimpleNamespace(
+                text="Chunk one",
+                meta=SimpleNamespace(
+                    doc_items=[item],
+                    headings=["Heading A"],
+                    origin=None,
+                ),
+            )
+
+            class DummyChunker:
+                def chunk(self, dl_doc):
+                    return [chunk]
+
+            with patch("documents.tasks._build_hybrid_chunker", return_value=DummyChunker()):
+                chunk_artifacts_task(job.id)
 
             kinds = set(Artifact.objects.filter(job=job).values_list("kind", flat=True))
             self.assertIn(ArtifactKind.CHUNKS_JSON, kinds)
@@ -461,14 +481,85 @@ class TestPipelineTasks(TestCase):
             chunks_path = os.path.join(tmpdir, chunks.storage_relpath)
             with open(chunks_path, "rb") as handle:
                 payload = json.loads(handle.read().decode("utf-8"))
-            self.assertEqual(payload.get("format"), "doctags")
-            self.assertIn("content", payload)
+            self.assertIsInstance(payload, list)
+            self.assertEqual(payload[0]["text"], "Chunk one")
+            self.assertEqual(payload[0]["meta"]["pages"], [2])
+            self.assertEqual(payload[0]["meta"]["headings"], ["Heading A"])
+            self.assertEqual(payload[0]["meta"]["bounding_boxes"][0]["bbox"]["l"], 1.0)
+            self.assertEqual(payload[0]["meta"]["doc_items"][0]["self_ref"], "#/texts/0")
 
             figures = Artifact.objects.get(job=job, kind=ArtifactKind.FIGURES_ZIP)
             figures_path = os.path.join(tmpdir, figures.storage_relpath)
             with zipfile.ZipFile(figures_path, "r") as archive:
                 names = archive.namelist()
             self.assertEqual(len(names), 1)
+
+            job.refresh_from_db()
+            self.assertEqual(job.stage, IngestionStage.CHUNKING)
+            self.assertIsNotNone(job.chunk_ms)
+            self.assertEqual(job.result_metrics_json["chunks_json_kind"], "hybrid_chunker")
+            self.assertEqual(job.result_metrics_json["chunk_count"], 1)
+
+    def test_chunk_artifacts_supports_doctags_compat_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_abs = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_abs), exist_ok=True)
+            with open(clean_abs, "wb") as handle:
+                handle.write(b"%PDF-1.4 fake\n")
+            doc.storage_relpath_clean = clean_relpath
+            doc.save()
+
+            job.options_json = {
+                "exports": ["chunks_json"],
+                "chunks_format": "doctags_compat",
+            }
+            job.save(update_fields=["options_json"])
+
+            class DummyResult:
+                def __init__(self, document):
+                    self.document = document
+
+            from docling_core.types.doc import DoclingDocument
+
+            class DummyConverter:
+                def convert(self, *args, **kwargs):
+                    return DummyResult(DoclingDocument(name="test"))
+
+            with self._patch_docling_converter(DummyConverter):
+                docling_convert_task(job.id)
+
+            export_artifacts_task(job.id)
+            chunk_artifacts_task(job.id)
+
+            chunks = Artifact.objects.get(job=job, kind=ArtifactKind.CHUNKS_JSON)
+            chunks_path = os.path.join(tmpdir, chunks.storage_relpath)
+            with open(chunks_path, "rb") as handle:
+                payload = json.loads(handle.read().decode("utf-8"))
+            self.assertEqual(payload.get("format"), "doctags")
+            self.assertIn("content", payload)
+
+            job.refresh_from_db()
+            self.assertEqual(
+                job.result_metrics_json["chunks_json_kind"],
+                "doctags_compatibility_payload",
+            )
+
+    def test_chunk_artifacts_invalid_options_stops_chain(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            _doc, job = self._make_doc_job(tmpdir)
+            job.options_json = {"chunking": {"max_tokens": 0}}
+            job.save(update_fields=["options_json"])
+
+            with self.assertRaises(RuntimeError):
+                chunk_artifacts_task(job.id)
+
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.FAILED)
+            self.assertEqual(job.stage, IngestionStage.CHUNKING)
+            self.assertEqual(job.error_code, "INVALID_OPTIONS")
+            self.assertIsNotNone(job.chunk_ms)
 
     def test_export_artifacts_respects_empty_exports(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -497,9 +588,12 @@ class TestPipelineTasks(TestCase):
                 docling_convert_task(job.id)
 
             export_artifacts_task(job.id)
+            chunk_artifacts_task(job.id)
 
             kinds = set(Artifact.objects.filter(job=job).values_list("kind", flat=True))
             self.assertEqual(kinds, {ArtifactKind.DOCLING_JSON})
+            job.refresh_from_db()
+            self.assertIsNotNone(job.chunk_ms)
 
     def test_export_artifacts_failure_marks_job_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
@@ -602,6 +696,18 @@ class TestPipelineTasks(TestCase):
         self.assertEqual(ocr_options["kind"], "rapidocr")
         self.assertEqual(ocr_options["lang"], ["de"])
         self.assertTrue(ocr_options["force_full_page_ocr"])
+
+    def test_request_chunking_options_override_profile_defaults(self):
+        resolved = resolve_effective_options(
+            self.api_key,
+            {"chunking": {"max_tokens": 256}},
+            "structured",
+        )
+
+        chunking = resolved["effective_options"]["chunking"]
+        self.assertEqual(chunking["tokenizer"], "simple")
+        self.assertEqual(chunking["max_tokens"], 256)
+        self.assertEqual(resolved["effective_options"]["chunks_format"], "hybrid")
 
     def test_profiles_pin_ocr_to_rapidocr(self):
         for profile in ("ocr_only", "structured", "full_vlm"):

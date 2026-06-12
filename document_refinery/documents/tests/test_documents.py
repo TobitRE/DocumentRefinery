@@ -533,6 +533,8 @@ class TestDoclingMetadataAPI(TestCase):
         self.assertIn("fast_text", profiles)
         self.assertIn("full_vlm", profiles)
         self.assertFalse(profiles["full_vlm"]["capabilities"]["vlm_pipeline"])
+        self.assertTrue(profiles["full_vlm"]["capabilities"]["real_chunking"])
+        self.assertFalse(profiles["fast_text"]["capabilities"]["real_chunking"])
         self.assertTrue(profiles["full_vlm"]["warnings"])
 
     def test_capabilities_endpoint_marks_planned_features(self):
@@ -543,7 +545,8 @@ class TestDoclingMetadataAPI(TestCase):
             ["pdf", "docx", "pptx", "xlsx"],
         )
         self.assertIn("multi_format_upload", response.data["features"]["implemented"])
-        self.assertIn("real_chunking", response.data["features"]["planned"])
+        self.assertIn("real_chunking", response.data["features"]["implemented"])
+        self.assertNotIn("real_chunking", response.data["features"]["planned"])
         self.assertIn("vlm_pipeline", response.data["features"]["planned"])
         schema = {item["key"]: item for item in response.data["options_schema"]}
         self.assertEqual(schema["ocr_engine"]["choices"], ["auto", "rapidocr"])
@@ -1019,6 +1022,65 @@ class TestDocumentIngestByUUID(TestCase):
         self.assertEqual(response.data["job_id"], job.id)
         start_mock.assert_not_called()
 
+    def test_ingest_by_uuid_does_not_reuse_legacy_chunks_job_without_format_marker(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            old_job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.SUCCEEDED,
+                stage=IngestionStage.FINALIZING,
+                profile="structured",
+                options_json={"exports": ["text", "markdown", "doctags", "chunks_json"]},
+            )
+            self._make_artifact(tmpdir, old_job)
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing", "profile": "structured"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["created"])
+        self.assertNotEqual(response.data["job_id"], old_job.id)
+        self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 2)
+        new_job = IngestionJob.objects.get(pk=response.data["job_id"])
+        self.assertEqual(new_job.options_json["chunks_format"], "hybrid")
+        start_mock.assert_called_once()
+
+    def test_ingest_by_uuid_does_not_reuse_legacy_chunks_job_with_unknown_format_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            old_job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.SUCCEEDED,
+                stage=IngestionStage.FINALIZING,
+                profile="structured",
+                options_json={
+                    "exports": ["text", "markdown", "doctags", "chunks_json"],
+                    "chunks_format": "hybrid",
+                },
+                result_metrics_json={
+                    "chunks_json_kind": "doctags_compatibility_payload",
+                },
+            )
+            self._make_artifact(tmpdir, old_job)
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing", "profile": "structured"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["created"])
+        self.assertNotEqual(response.data["job_id"], old_job.id)
+        start_mock.assert_called_once()
+
     def test_ingest_by_uuid_reuse_existing_creates_job_when_no_match(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc = self._make_document_with_clean(tmpdir)
@@ -1116,6 +1178,35 @@ class TestDocumentIngestByUUID(TestCase):
             self.assertTrue(response.data["retried"])
             job.refresh_from_db()
             self.assertEqual(job.status, IngestionJobStatus.QUEUED)
+            start_mock.assert_called_once_with(job.id)
+
+    def test_ingest_by_uuid_retry_failed_updates_legacy_chunks_options(self):
+        self._grant_retry_scope()
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.FAILED,
+                stage=IngestionStage.CHUNKING,
+                attempt=1,
+                max_retries=3,
+                profile="structured",
+                options_json={"exports": ["text", "markdown", "doctags", "chunks_json"]},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "retry_failed", "profile": "structured"},
+                    format="json",
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.data["retried"])
+            job.refresh_from_db()
+            self.assertEqual(job.status, IngestionJobStatus.QUEUED)
+            self.assertEqual(job.options_json["chunks_format"], "hybrid")
             start_mock.assert_called_once_with(job.id)
 
     def test_ingest_by_uuid_retry_failed_requires_jobs_write(self):

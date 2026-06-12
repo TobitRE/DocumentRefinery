@@ -120,7 +120,7 @@
                   {% if profile.capabilities.parsed_pages %}<span class="status status-ok">parsed pages</span>{% endif %}
                   {% if profile.capabilities.picture_images %}<span class="status status-ok">figure images</span>{% endif %}
                   <span class="status status-neutral">vlm_pipeline: false</span>
-                  <span class="status status-neutral">real_chunking: false</span>
+                  {% if profile.capabilities.real_chunking %}<span class="status status-ok">real_chunking: true</span>{% else %}<span class="status status-neutral">real_chunking: false</span>{% endif %}
                 </div>
                 {% for warning in profile.warnings %}
                   <div class="status status-warn">{{ warning }}</div>

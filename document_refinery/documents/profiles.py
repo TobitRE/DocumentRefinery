@@ -41,6 +41,7 @@ PROFILE_DEFINITIONS: dict[str, dict] = {
             "generate_parsed_pages": True,
             "ocr_options": {"kind": "rapidocr", "lang": []},
         },
+        "chunking_options": {"tokenizer": "simple", "max_tokens": 512},
         "exports": ["text", "markdown", "doctags", "chunks_json"],
     },
     "full_vlm": {
@@ -61,6 +62,7 @@ PROFILE_DEFINITIONS: dict[str, dict] = {
             "images_scale": 2.0,
             "ocr_options": {"kind": "rapidocr", "lang": []},
         },
+        "chunking_options": {"tokenizer": "simple", "max_tokens": 512},
         "exports": ["text", "markdown", "doctags", "chunks_json", "figures_zip"],
     },
 }
@@ -134,6 +136,7 @@ def profile_catalog() -> list[dict]:
     for name in PROFILE_NAMES:
         definition = get_profile_definition(name) or {}
         pipeline_options = definition.get("pipeline_options") or {}
+        exports = list(definition.get("exports") or [])
         catalog.append(
             {
                 "name": name,
@@ -142,7 +145,8 @@ def profile_catalog() -> list[dict]:
                 "resource_level": definition.get("resource_level") or "unknown",
                 "feature_status": definition.get("feature_status") or "implemented",
                 "pipeline_options": pipeline_options,
-                "exports": list(definition.get("exports") or []),
+                "chunking_options": dict(definition.get("chunking_options") or {}),
+                "exports": exports,
                 "warnings": list(definition.get("warnings") or []),
                 "capabilities": {
                     "ocr": bool(pipeline_options.get("do_ocr")),
@@ -150,7 +154,7 @@ def profile_catalog() -> list[dict]:
                     "parsed_pages": bool(pipeline_options.get("generate_parsed_pages")),
                     "picture_images": bool(pipeline_options.get("generate_picture_images")),
                     "vlm_pipeline": False,
-                    "real_chunking": False,
+                    "real_chunking": "chunks_json" in exports,
                 },
             }
         )
