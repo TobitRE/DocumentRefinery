@@ -13,6 +13,7 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from celery import current_app
 
 from authn.permissions import HasScope
@@ -1017,25 +1018,31 @@ class DocumentViewSet(
     permission_classes = [APIKeyRequired, HasScope]
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve"):
+        action = getattr(self, "action", "")
+        if action in ("list", "retrieve"):
             self.required_scopes = ["documents:read"]
-        elif self.action in ("create", "compare", "ingest_by_uuid"):
+        elif action in ("create", "compare", "ingest_by_uuid"):
             self.required_scopes = ["documents:write"]
         else:
             self.required_scopes = []
         return super().get_permissions()
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Document.objects.none()
         api_key = self.request.auth
         return Document.objects.filter(tenant=api_key.tenant).order_by("-created_at")
 
+    @extend_schema(request=DocumentUploadSerializer, responses=OpenApiTypes.OBJECT)
     def create(self, request, *args, **kwargs):
         return create_document_for_api_key(request.auth, request.data, request)
 
+    @extend_schema(request=DocumentIngestSerializer, responses=OpenApiTypes.OBJECT)
     def ingest_by_uuid(self, request, document_uuid=None):
         return ingest_document_for_api_key(request.auth, document_uuid, request.data)
 
     @action(detail=True, methods=["post"], url_path="compare")
+    @extend_schema(request=DocumentCompareSerializer, responses=OpenApiTypes.OBJECT)
     def compare(self, request, pk=None):
         self.get_object()
         return compare_document_for_api_key(request.auth, pk, request.data)
@@ -1055,6 +1062,8 @@ class ArtifactViewSet(
         return super().get_permissions()
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Artifact.objects.none()
         api_key = self.request.auth
         queryset = Artifact.objects.filter(tenant=api_key.tenant).order_by("-created_at")
         job_id = self.request.query_params.get("job_id")
@@ -1106,13 +1115,16 @@ class JobViewSet(
     permission_classes = [APIKeyRequired, HasScope]
 
     def get_permissions(self):
-        if self.action in ("cancel", "retry"):
+        action = getattr(self, "action", "")
+        if action in ("cancel", "retry"):
             self.required_scopes = ["jobs:write"]
         else:
             self.required_scopes = ["jobs:read"]
         return super().get_permissions()
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return IngestionJob.objects.none()
         api_key = self.request.auth
         queryset = IngestionJob.objects.filter(tenant=api_key.tenant).order_by("-created_at")
 
@@ -1232,13 +1244,16 @@ class WebhookEndpointViewSet(
     permission_classes = [APIKeyRequired, HasScope]
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve"):
+        action = getattr(self, "action", "")
+        if action in ("list", "retrieve"):
             self.required_scopes = ["webhooks:read"]
         else:
             self.required_scopes = ["webhooks:write"]
         return super().get_permissions()
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return WebhookEndpoint.objects.none()
         api_key = self.request.auth
         return WebhookEndpoint.objects.filter(tenant=api_key.tenant).order_by("-created_at")
 
@@ -1257,6 +1272,7 @@ class DoclingProfilesView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes: list[str] = []
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         if not _has_any_scope(request.auth, DOCLING_METADATA_SCOPES):
             return _scope_denied_response()
@@ -1267,6 +1283,7 @@ class DoclingCapabilitiesView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes: list[str] = []
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         if not _has_any_scope(request.auth, DOCLING_METADATA_SCOPES):
             return _scope_denied_response()
@@ -1277,6 +1294,7 @@ class DoclingOptionsResolveView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes: list[str] = []
 
+    @extend_schema(request=DoclingOptionsResolveSerializer, responses=OpenApiTypes.OBJECT)
     def post(self, request):
         if not _has_any_scope(request.auth, DOCLING_METADATA_SCOPES):
             return _scope_denied_response()

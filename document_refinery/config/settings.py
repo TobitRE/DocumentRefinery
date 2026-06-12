@@ -124,9 +124,10 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_spectacular',
     'django_filters',
     'core',
-    'authn',
+    'authn.apps.AuthnConfig',
     'documents',
     'dashboard',
 ]
@@ -151,9 +152,17 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "authn.permissions.APIKeyRequired",
     ),
+    "DEFAULT_RENDERER_CLASSES": (
+        "core.api.StandardJSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ),
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
     ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_PAGINATION_CLASS": "core.api.StandardPageNumberPagination",
+    "PAGE_SIZE": 50,
+    "EXCEPTION_HANDLER": "core.api.exception_handler",
 }
 
 REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = (
@@ -161,6 +170,15 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = (
 )
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
     "api_key": os.environ.get("API_THROTTLE_RATE", "120/min"),
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "DocumentRefinery API",
+    "DESCRIPTION": "Document ingestion, Docling processing, artifacts, jobs, and webhooks.",
+    "VERSION": "1.0.0",
+    "SCHEMA_PATH_PREFIX": r"/v1",
+    "SERVE_PUBLIC": True,
+    "COMPONENT_SPLIT_REQUEST": True,
 }
 
 LOGGING = {
