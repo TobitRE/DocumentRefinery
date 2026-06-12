@@ -1,3 +1,13 @@
+# Archived: Docling Extraction Service Task List
+
+Status: archived on 2026-06-12 for the `v0.1.0` beta documentation pass.
+
+This file is retained as historical planning context. It is no longer the active
+source of project status; the current implemented feature list, architecture,
+known limitations, and release status live in `README.md` and `CHANGELOG.md`.
+
+---
+
 # Docling Extraction Service — Django + DRF + Celery (Local FS) — Task List
 
 This document is a **workable implementation task list** for a Django system that:

@@ -176,7 +176,7 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
 SPECTACULAR_SETTINGS = {
     "TITLE": "DocumentRefinery API",
     "DESCRIPTION": "Document ingestion, Docling processing, artifacts, jobs, and webhooks.",
-    "VERSION": "1.0.0",
+    "VERSION": "0.1.0",
     "SCHEMA_PATH_PREFIX": r"/v1",
     "SERVE_PUBLIC": True,
     "COMPONENT_SPLIT_REQUEST": True,

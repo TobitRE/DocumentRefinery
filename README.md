@@ -1,23 +1,101 @@
 # DocumentRefinery
 
-Docling-based document extraction service built on Django, DRF, and Celery.
+Status: Beta. Current release: `v0.1.0`.
 
-Status: planning and task breakdown live in `docling_django_task_list.md`.
+DocumentRefinery is a tenant-aware document extraction service built with Django,
+Django REST Framework, Celery, Docling, ClamAV, and local filesystem storage. It
+accepts document uploads, scans them before processing, runs Docling conversion in
+background workers, stores derived artifacts, and exposes operator-facing dashboard
+views plus API-first integration endpoints.
 
-## Overview
+The project is usable for local and single-host deployments, but it is still
+pre-1.0. See [Known Limitations](#known-limitations) before treating it as a
+security-sensitive production service.
 
-This service is intended to:
-- accept PDF uploads via REST API (API-key required)
-- virus-scan uploads with ClamAV before processing
-- run Docling conversion and export artifacts (JSON/Markdown/Text/DocTags/chunks)
-- execute heavy work asynchronously via Celery
-- serve artifacts from local filesystem, optionally via Nginx `X-Accel-Redirect`
-- provide Django Admin for operations and a minimal dashboard
+## Implemented Features
 
-## Repo contents
+- Tenant-scoped API keys with hashed key storage, scopes, last-used tracking,
+  rotation/deactivation in Django Admin, and per-key upload MIME allowlists.
+- Upload API for PDF, DOCX, PPTX, and XLSX inputs with signature checks, size
+  limits, quarantine storage, SHA-256 dedupe per tenant, and optional immediate
+  ingestion.
+- Celery ingestion pipeline: virus scan with ClamAV, Docling conversion, artifact
+  export, optional chunk generation, final status updates, and job webhooks.
+- Docling option handling with tenant/key defaults, request overrides, profile
+  presets, option resolution endpoints, and deployment-level OCR/tokenizer
+  allowlists.
+- Artifacts stored under `DATA_ROOT`, with checksums, sizes, retention timestamps,
+  preview endpoints, direct streaming, and optional Nginx `X-Accel-Redirect`
+  downloads.
+- Job lifecycle APIs for listing, filtering, canceling, retrying failed work, and
+  inspecting timing/runtime/result metrics.
+- PDF profile comparison jobs that run multiple Docling profiles against the same
+  document and group jobs by `comparison_id`.
+- Webhook endpoint CRUD and `job.updated` deliveries with retry/backoff, HMAC
+  signatures, delivery history, URL validation, and private-address protection.
+- Staff dashboard pages for operations, uploads, jobs, profile comparison,
+  Docling profiles, API keys, webhooks, webhook deliveries, system status, and
+  runtime diagnostics.
+- Dashboard API for summary metrics, Celery worker inspection, usage reporting,
+  and runtime diagnostics.
+- Internal `healthz`, `readyz`, and Prometheus-style `metrics` endpoints guarded
+  by `INTERNAL_ENDPOINTS_TOKEN`.
+- Retention cleanup tasks for expired artifacts, expired documents, and infected
+  quarantine files, scheduled hourly through Celery Beat.
+- Ubuntu-oriented install/update scripts for a single-host Gunicorn, Celery,
+  Redis, ClamAV, Nginx, and optional PostgreSQL deployment.
 
-- `docling_django_task_list.md` — implementation plan and checklist
-- `README.md` — project overview and setup notes
+Not implemented yet: object storage, multi-region deployment, billing, per-tenant
+quota enforcement, HTML/image/audio inputs, and real end-to-end CI against live
+external services.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    client["API client"] --> nginx["Nginx / Gunicorn"]
+    staff["Staff user"] --> dashboard["Django dashboard"]
+    nginx --> django["Django + DRF"]
+    dashboard --> django
+    django --> db[("SQLite or PostgreSQL")]
+    django --> data[("DATA_ROOT local filesystem")]
+    django --> redis[("Redis broker")]
+    redis --> worker["Celery worker"]
+    worker --> clamav["ClamAV clamd"]
+    worker --> docling["Docling runtime and model caches"]
+    worker --> data
+    worker --> db
+    worker --> webhook["Webhook targets"]
+    beat["Celery Beat"] --> redis
+    nginx -. "X-Accel-Redirect downloads" .-> data
+```
+
+Storage is local-first. The application stores quarantine files, clean source
+files, and artifacts below `DATA_ROOT`; Nginx can serve artifact files through an
+internal protected location when `X_ACCEL_REDIRECT_ENABLED=true`.
+
+## API Surface
+
+All `/v1/` API endpoints require `Authorization: Api-Key <token>` unless noted.
+
+| Area | Endpoints |
+| --- | --- |
+| Schema | `GET /v1/schema/` |
+| Documents | `POST /v1/documents/`, `GET /v1/documents/`, `GET /v1/documents/{id}/`, `POST /v1/documents/{id}/compare/`, `POST /v1/documents/{uuid}/ingest/` |
+| Jobs | `GET /v1/jobs/`, `GET /v1/jobs/{id}/`, `POST /v1/jobs/{id}/cancel/`, `POST /v1/jobs/{id}/retry/` |
+| Artifacts | `GET /v1/artifacts/`, `GET /v1/artifacts/?job_id=...`, `GET /v1/artifacts/{id}/`, `GET /v1/artifacts/{id}/preview/` |
+| Docling metadata | `GET /v1/docling/profiles/`, `GET /v1/docling/capabilities/`, `POST /v1/docling/options/resolve/` |
+| Webhooks | `GET/POST /v1/webhooks/`, `GET/PATCH/PUT/DELETE /v1/webhooks/{id}/` |
+| Dashboard API | `GET /v1/dashboard/summary`, `GET /v1/dashboard/workers`, `GET /v1/dashboard/reports/usage`, `GET /v1/dashboard/runtime` |
+| Internal ops | `GET /healthz`, `GET /readyz`, `GET /metrics` with `X-Internal-Token` |
+
+Important scopes:
+
+- `documents:read`, `documents:write`
+- `jobs:read`, `jobs:write`
+- `artifacts:read`
+- `dashboard:read`
+- `webhooks:read`, `webhooks:write`
 
 ## Quickstart
 
@@ -30,173 +108,120 @@ cp .env.example .env
 ./venv/bin/python document_refinery/manage.py runserver
 ```
 
-## CI
-
-GitHub Actions CI is currently manual-only via `workflow_dispatch`; PR and `main` push triggers are
-temporarily disabled. The workflow contains:
-- Django tests on Python 3.12 after installing `requirements.txt`
-- Ruff lint with a conservative config that only checks syntax-level and undefined-name issues
-- Coverage with `coverage report -m --fail-under=90`
-
-The current test suite does not run Docling conversion against real documents; conversion tests patch
-`documents.tasks._load_docling_converter`. The suite still needs the real `docling` package for
-profile and pipeline option objects used by `documents.profiles` and `documents.docling_options`, so
-CI installs the full `requirements.txt`. `onnxruntime` is not directly imported by the current tests,
-but remains part of the CI install for runtime parity. If a lightweight CI lane without Docling is
-added later, mock at the profile/options boundary (`build_profile_pipeline_options` or
-`build_pdf_pipeline_options_from_dict`) and keep conversion isolated by patching
-`_load_docling_converter`.
-
-In another terminal, start a Celery worker:
+Start a Celery worker from a second terminal:
 
 ```bash
-./venv/bin/celery -A config worker --loglevel=INFO
+cd document_refinery
+../venv/bin/celery -A config worker --loglevel=INFO
 ```
 
-Run Celery Beat as well when retention cleanup should execute automatically:
+Start Celery Beat as well when retention cleanup should run automatically:
 
 ```bash
-./venv/bin/celery -A config beat --loglevel=INFO
+cd document_refinery
+../venv/bin/celery -A config beat --loglevel=INFO
 ```
 
-Minimal upload example:
+Create a tenant and API key in Django Admin, then upload a document:
 
 ```bash
 curl -X POST http://localhost:8000/v1/documents/ \
   -H "Authorization: Api-Key <your-key>" \
-  -F "file=@sample.pdf"
+  -F "file=@sample.pdf" \
+  -F "ingest=true"
 ```
 
-## Install script (single host)
+Upload options are JSON-compatible. Example with explicit exports:
 
-An interactive installer is available for Ubuntu-based single-host deployments.
-It assumes the repo is already cloned and you run it from within the repo.
+```bash
+curl -X POST http://localhost:8000/v1/documents/ \
+  -H "Authorization: Api-Key <your-key>" \
+  -F "file=@sample.pdf" \
+  -F "ingest=true" \
+  -F 'options_json={"exports":["markdown","text","doctags","chunks_json"]}'
+```
+
+## Configuration
+
+See `.env.example` for the complete list. The most important values are:
+
+- `SECRET_KEY`
+- `DATA_ROOT`, `HF_HOME`, `DOCLING_CACHE_DIR`, `DOCLING_ARTIFACTS_PATH`
+- `DOCLING_DEVICE`, `DOCLING_NUM_THREADS`, `DOCLING_ALLOWED_OCR_ENGINES`
+- `UPLOAD_MAX_SIZE_MB`, `MAX_PAGES`
+- `DOCUMENT_RETENTION_DAYS`, `ARTIFACT_RETENTION_DAYS`,
+  `INFECTED_QUARANTINE_RETENTION_DAYS`
+- `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `CELERY_WORKER_CONCURRENCY`
+- `CLAMAV_HOST`, `CLAMAV_PORT`, or `CLAMAV_SOCKET`
+- `X_ACCEL_REDIRECT_ENABLED`, `X_ACCEL_REDIRECT_LOCATION`
+- `INTERNAL_ENDPOINTS_TOKEN`
+- `WEBHOOK_ALLOWED_HOSTS`, `WEBHOOK_INCLUDE_ERROR_DETAILS`,
+  `API_INCLUDE_ERROR_DETAILS`
+- `DATABASE_URL` for PostgreSQL; SQLite is the default if unset
+
+## Local Tests
+
+```bash
+venv/bin/python document_refinery/manage.py test
+venv/bin/python -m coverage run document_refinery/manage.py test
+venv/bin/python -m coverage report -m
+```
+
+The current local coverage run is documented in `AGENTS.md`. CI is configured as
+a manual GitHub Actions workflow (`workflow_dispatch`) with Django tests, Ruff,
+and coverage `--fail-under=90`.
+
+## Deployment
+
+For a single Ubuntu host, use:
 
 ```bash
 sudo python3 deploy/install_document_refinery.py
 ```
 
-Notes:
-- The virtualenv is created one level above the repo (default `../venv`).
-- The script can generate `.env` from `.env.example`, install system deps,
-  configure systemd + nginx, and optionally request TLS via certbot.
-- It configures `STATIC_ROOT` and runs `collectstatic` during install.
-- It installs and enables `clamav-freshclam` for signature updates.
-- It can run a Docling smoke test and will prompt for an email-based superuser.
-- It can configure PostgreSQL and set `DATABASE_URL` when requested.
-- The dashboard includes a staff-only system stats panel at `/dashboard/`.
+The installer can create `.env`, install system dependencies, configure systemd
+units, configure Nginx, run migrations, collect static files, enable ClamAV
+signature updates, warm Docling models, and optionally request TLS with Certbot.
 
-Resume mode (skip destructive steps by default):
+Useful follow-up commands:
 
 ```bash
 sudo python3 deploy/install_document_refinery.py --resume
-```
-
-Only overwrite nginx config (reads existing `.env` for `STATIC_ROOT`/`DATA_ROOT`):
-
-```bash
 sudo python3 deploy/install_document_refinery.py --only-nginx
-```
-
-Skip migrations during install (e.g. for read-only DB access):
-
-```bash
 sudo python3 deploy/install_document_refinery.py --skip-migrate
-```
-
-Help and non-interactive inputs:
-
-```bash
-python3 deploy/install_document_refinery.py -h
-sudo python3 deploy/install_document_refinery.py --domain docs.example.com --certbot-email admin@example.com --request-tls
-```
-
-## Update script
-
-For deployments using systemd + nginx, you can update in-place from the repo root:
-
-```bash
 ./deploy/update_document_refinery.sh
 ```
 
-This script pulls `main`, installs dependencies from `requirements.txt`, runs migrations,
-restarts `gunicorn.service` and `celery-worker.service` (and `celery-beat.service` if present),
-reloads nginx, and warms up `/healthz`.
+See `DEPLOYMENT.md`, `deploy/README.md`, and `EXTERNAL_SERVICES.md` for more
+operational detail.
 
-Backups run by default (env + sqlite DB). Disable with `--no-backup`.
+## Known Limitations
 
-```bash
-./deploy/update_document_refinery.sh --no-backup
-```
+- API keys are hashed with HMAC-SHA256 using Django `SECRET_KEY`. Rotating
+  `SECRET_KEY` without a migration or key rotation plan makes existing API keys
+  impossible to look up.
+- Webhook signing secrets are stored in plaintext in the `WebhookEndpoint.secret`
+  database field so workers can sign outbound requests. Database access and
+  backups must be treated as secret-bearing until encrypted-field or KMS support
+  is added.
+- Tests mock external services heavily. ClamAV responses, Docling conversion, and
+  webhook delivery paths are covered with mocks/fakes; the default test suite
+  does not prove real ClamAV, real Docling model execution, or real third-party
+  webhook endpoints end to end.
+- Runtime diagnostics and Celery worker inspection are best-effort and depend on
+  broker availability and worker configuration.
+- Artifact storage is local filesystem only. There is no S3/object-storage
+  backend or cross-host shared storage abstraction.
+- Quotas and disk-pressure controls are not implemented yet; operators must
+  monitor `DATA_ROOT` capacity externally.
 
-You can also set a custom backup directory:
+## Documentation Map
 
-```bash
-./deploy/update_document_refinery.sh --backup-dir /var/backups/document_refinery
-```
-
-To include `DATA_ROOT` artifacts (can be large):
-
-```bash
-./deploy/update_document_refinery.sh --backup --backup-data-root
-```
-
-Note: backing up `DATA_ROOT` requires read permissions (run with sudo if needed).
-
-If `DATABASE_URL` points to PostgreSQL and `pg_dump` is available, the update script will
-also save a database dump in the backup directory.
-
-To update a different branch:
-
-```bash
-./deploy/update_document_refinery.sh --branch release
-```
-
-## Environment variables
-
-Expected configuration values:
-- `DJANGO_SETTINGS_MODULE`
-- `SECRET_KEY`
-- `DATA_ROOT`
-- `HF_HOME`
-- `DOCLING_DEVICE`
-- `DOCLING_NUM_THREADS`
-- `STATIC_ROOT`
-- `UPLOAD_MAX_SIZE_MB`
-- `MAX_PAGES`
-- `DOCUMENT_RETENTION_DAYS` (default `0`, unlimited)
-- `ARTIFACT_RETENTION_DAYS` (default `0`, unlimited)
-- `INFECTED_QUARANTINE_RETENTION_DAYS` (default `0`, unlimited)
-- `CELERY_BROKER_URL`
-- `CELERY_RESULT_BACKEND` (optional)
-- `CELERY_WORKER_CONCURRENCY`
-- `ALLOWED_HOSTS`
-- `DATABASE_URL` (optional, defaults to SQLite)
-- `INTERNAL_ENDPOINTS_TOKEN` (required for health/ready/metrics)
-- `CORS_ALLOWED_ORIGINS` (if needed)
-
-## References
-
-See `docling_django_task_list.md` for the detailed architecture and task plan.
-
-## Retention
-
-`cleanup_expired_artifacts` and `cleanup_expired_documents` are scheduled hourly through
-`CELERY_BEAT_SCHEDULE`. Start a Celery Beat process in deployments that need automatic cleanup.
-
-`DOCUMENT_RETENTION_DAYS` and `ARTIFACT_RETENTION_DAYS` set the default retention windows used when
-new documents or artifacts are created. A value of `0` keeps records indefinitely by leaving
-`expires_at` empty. Each tenant can override these defaults in Django Admin; a blank tenant value
-falls back to the environment default, and a tenant value of `0` means unlimited for that tenant.
-
-`INFECTED_QUARANTINE_RETENTION_DAYS` controls when quarantine files for documents marked `INFECTED`
-are removed. This cleanup removes the quarantine file and empty storage directories, but keeps the
-document row for audit/history. Tenants can override this setting in Django Admin as well.
-
-Cleanup removes expired artifact files, expired document source/clean files, derived artifact files,
-and now-empty tenant/job storage directories under `DATA_ROOT`.
-
-## Operational docs
-
-- `DEPLOYMENT.md`
-- `EXTERNAL_SERVICES.md`
+- `API_INTEGRATION.md` - client-facing API integration guide.
+- `ENDPOINTS.md` - endpoint notes.
+- `DEPLOYMENT.md` and `deploy/README.md` - deployment and operations.
+- `EXTERNAL_SERVICES.md` and `EXTERNAL_RELATIONS.md` - external dependencies and
+  integration context.
+- `DECISIONS.md` - recorded implementation decisions.
+- `docs/archive/docling_django_task_list.md` - archived pre-beta planning
+  checklist retained for historical context.
