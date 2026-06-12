@@ -20,7 +20,14 @@ from documents.formats import (
     PPTX,
     XLSX,
 )
-from documents.models import Document, IngestionJob, IngestionJobStatus, IngestionStage
+from documents.models import (
+    Artifact,
+    ArtifactKind,
+    Document,
+    IngestionJob,
+    IngestionJobStatus,
+    IngestionStage,
+)
 
 
 class TestDocumentUpload(TestCase):
@@ -841,6 +848,23 @@ class TestDocumentIngestByUUID(TestCase):
         doc.save(update_fields=["storage_relpath_quarantine"])
         return doc
 
+    def _make_artifact(self, tmpdir, job):
+        relpath = os.path.join("artifacts", str(job.tenant_id), str(job.id), "doc.txt")
+        abs_path = os.path.join(tmpdir, relpath)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        with open(abs_path, "wb") as handle:
+            handle.write(b"artifact")
+        return Artifact.objects.create(
+            tenant=job.tenant,
+            created_by_key=job.created_by_key,
+            job=job,
+            kind=ArtifactKind.TEXT,
+            storage_relpath=relpath,
+            checksum_sha256="c" * 64,
+            size_bytes=8,
+            content_type="text/plain",
+        )
+
     def _grant_retry_scope(self):
         self.api_key.scopes = ["documents:write", "jobs:read", "jobs:write"]
         self.api_key.save(update_fields=["scopes"])
@@ -948,6 +972,7 @@ class TestDocumentIngestByUUID(TestCase):
                 stage=IngestionStage.FINALIZING,
                 options_json={},
             )
+            self._make_artifact(tmpdir, job)
             with patch("documents.views.start_ingestion_pipeline") as start_mock:
                 response = self.client.post(
                     f"/v1/documents/{doc.uuid}/ingest/",
@@ -980,6 +1005,7 @@ class TestDocumentIngestByUUID(TestCase):
                 profile="fast_text",
                 options_json={"exports": ["text", "markdown", "doctags"]},
             )
+            self._make_artifact(tmpdir, job)
             with patch("documents.views.start_ingestion_pipeline") as start_mock:
                 response = self.client.post(
                     f"/v1/documents/{doc.uuid}/ingest/",
@@ -1005,6 +1031,30 @@ class TestDocumentIngestByUUID(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertTrue(response.data["created"])
         self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 1)
+
+    def test_ingest_by_uuid_reuse_existing_ignores_succeeded_job_without_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc = self._make_document_with_clean(tmpdir)
+            old_job = IngestionJob.objects.create(
+                tenant=self.tenant,
+                created_by_key=self.api_key,
+                document=doc,
+                status=IngestionJobStatus.SUCCEEDED,
+                stage=IngestionStage.FINALIZING,
+                options_json={},
+            )
+            with patch("documents.views.start_ingestion_pipeline") as start_mock:
+                response = self.client.post(
+                    f"/v1/documents/{doc.uuid}/ingest/",
+                    {"mode": "reuse_existing"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["created"])
+        self.assertNotEqual(response.data["job_id"], old_job.id)
+        self.assertEqual(IngestionJob.objects.filter(document=doc).count(), 2)
+        start_mock.assert_called_once()
 
     def test_ingest_by_uuid_retry_failed_requeues_retryable_job(self):
         self._grant_retry_scope()

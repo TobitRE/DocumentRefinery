@@ -14,6 +14,24 @@ class Tenant(BaseModel):
     slug = models.SlugField(unique=True)
     active = models.BooleanField(default=True)
     docling_options_json = models.JSONField(null=True, blank=True)
+    document_retention_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Overrides DOCUMENT_RETENTION_DAYS. Use 0 for unlimited retention.",
+    )
+    artifact_retention_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Overrides ARTIFACT_RETENTION_DAYS. Use 0 for unlimited retention.",
+    )
+    infected_quarantine_retention_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Overrides INFECTED_QUARANTINE_RETENTION_DAYS. "
+            "Use 0 to keep infected quarantine files indefinitely."
+        ),
+    )
 
     def __str__(self) -> str:
         return self.name

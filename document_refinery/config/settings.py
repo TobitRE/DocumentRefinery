@@ -65,6 +65,11 @@ os.environ.setdefault("DOCLING_ALLOWED_OCR_ENGINES", DOCLING_ALLOWED_OCR_ENGINES
 UPLOAD_MAX_SIZE_MB = int(os.environ.get("UPLOAD_MAX_SIZE_MB", "50"))
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "0"))
 DOC_DEFAULT_OPTIONS = {}
+DOCUMENT_RETENTION_DAYS = int(os.environ.get("DOCUMENT_RETENTION_DAYS", "0"))
+ARTIFACT_RETENTION_DAYS = int(os.environ.get("ARTIFACT_RETENTION_DAYS", "0"))
+INFECTED_QUARANTINE_RETENTION_DAYS = int(
+    os.environ.get("INFECTED_QUARANTINE_RETENTION_DAYS", "0")
+)
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "")
@@ -82,6 +87,18 @@ X_ACCEL_REDIRECT_LOCATION = os.environ.get("X_ACCEL_REDIRECT_LOCATION", "/protec
 CELERY_CANCEL_SIGNAL = os.environ.get("CELERY_CANCEL_SIGNAL", "SIGTERM")
 CELERY_DEFAULT_QUEUE = os.environ.get("CELERY_DEFAULT_QUEUE", "default")
 CELERY_WORKER_CONCURRENCY = int(os.environ.get("CELERY_WORKER_CONCURRENCY", "1"))
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-expired-artifacts-hourly": {
+        "task": "documents.tasks.cleanup_expired_artifacts",
+        "schedule": 3600.0,
+        "options": {"queue": CELERY_DEFAULT_QUEUE},
+    },
+    "cleanup-expired-documents-hourly": {
+        "task": "documents.tasks.cleanup_expired_documents",
+        "schedule": 3600.0,
+        "options": {"queue": CELERY_DEFAULT_QUEUE},
+    },
+}
 INTERNAL_ENDPOINTS_TOKEN = os.environ.get("INTERNAL_ENDPOINTS_TOKEN", "")
 WEBHOOK_MAX_ATTEMPTS = int(os.environ.get("WEBHOOK_MAX_ATTEMPTS", "5"))
 WEBHOOK_INITIAL_BACKOFF_SECONDS = int(os.environ.get("WEBHOOK_INITIAL_BACKOFF_SECONDS", "30"))

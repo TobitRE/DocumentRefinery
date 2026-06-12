@@ -46,6 +46,7 @@ from .formats import (
     format_for_mime_type,
     validate_uploaded_file_signature,
 )
+from .retention import document_expires_at
 from .serializers import (
     ArtifactSerializer,
     DoclingOptionsResolveSerializer,
@@ -560,6 +561,7 @@ def create_document_for_api_key(
         mime_type=content_type or document_format.primary_mime_type,
         size_bytes=0,
         storage_relpath_quarantine="",
+        expires_at=document_expires_at(api_key.tenant),
     )
     relpath = os.path.join(
         "uploads",
@@ -687,12 +689,17 @@ def ingest_document_for_api_key(
 
     if mode == "reuse_existing":
         existing_job = jobs.filter(
-            status__in=(
-                IngestionJobStatus.QUEUED,
-                IngestionJobStatus.RUNNING,
-                IngestionJobStatus.SUCCEEDED,
-            )
+            status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
         ).first()
+        if not existing_job:
+            existing_job = (
+                jobs.filter(
+                    status=IngestionJobStatus.SUCCEEDED,
+                    artifacts__isnull=False,
+                )
+                .distinct()
+                .first()
+            )
         if existing_job:
             return Response(
                 _ingest_job_payload(

@@ -44,6 +44,7 @@ from .docling_options import (
 )
 from .formats import extension_for_mime_type, format_for_mime_type
 from .profiles import build_profile_pipeline_options
+from .retention import artifact_expires_at, infected_quarantine_retention_days
 
 DEFAULT_WEBHOOK_EVENTS = ["job.updated"]
 DOCLING_UNLIMITED = 9223372036854775807
@@ -122,47 +123,147 @@ def start_ingestion_pipeline(job_id: int):
     return result
 
 
+def _remove_empty_parent_dirs(start_dir: Path, stop_dir: Path) -> None:
+    try:
+        data_root = Path(settings.DATA_ROOT).resolve()
+        current = start_dir.resolve()
+        stop = stop_dir.resolve()
+        current.relative_to(stop)
+        stop.relative_to(data_root)
+    except (OSError, RuntimeError, ValueError):
+        return
+
+    while current != stop and current != data_root:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
+def _remove_storage_file(relpath: str | None, stop_relpath: str) -> bool:
+    abs_path = resolve_data_root_path(relpath)
+    if not abs_path:
+        return False
+
+    path = Path(abs_path)
+    removed = False
+    try:
+        if path.exists():
+            path.unlink()
+            removed = True
+    except OSError:
+        pass
+
+    _remove_empty_parent_dirs(path.parent, Path(settings.DATA_ROOT) / stop_relpath)
+    return removed
+
+
 @shared_task(bind=True)
 def cleanup_expired_artifacts(self) -> int:
     now = timezone.now()
-    expired_artifacts = Artifact.objects.filter(expires_at__lt=now)
+    expired_artifacts = Artifact.objects.filter(expires_at__lt=now).exclude(
+        job__status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
+    )
     deleted = 0
     for artifact in expired_artifacts:
-        abs_path = artifact.get_storage_path()
-        try:
-            if os.path.exists(abs_path):
-                os.remove(abs_path)
-        except OSError:
-            pass
+        _remove_storage_file(artifact.storage_relpath, "artifacts")
         artifact.delete()
         deleted += 1
     return deleted
 
 
+def _has_active_jobs(doc: Document) -> bool:
+    return IngestionJob.objects.filter(
+        document=doc,
+        status__in=(IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING),
+    ).exists()
+
+
+def _cleanup_artifacts_for_document(doc: Document) -> int:
+    artifacts = list(Artifact.objects.filter(job__document=doc))
+    for artifact in artifacts:
+        _remove_storage_file(artifact.storage_relpath, "artifacts")
+    Artifact.objects.filter(pk__in=[artifact.pk for artifact in artifacts]).delete()
+    return len(artifacts)
+
+
+def _cleanup_infected_quarantine_files(now) -> int:
+    cleaned = 0
+    docs = Document.objects.filter(status=DocumentStatus.INFECTED).select_related("tenant")
+    for doc in docs:
+        retention_days = infected_quarantine_retention_days(doc.tenant)
+        if retention_days <= 0:
+            continue
+        reference_at = doc.infected_at or doc.modified_at or doc.created_at
+        if not reference_at or reference_at > now - timedelta(days=retention_days):
+            continue
+        relpaths = [doc.storage_relpath_quarantine]
+        relpaths.extend(
+            IngestionJob.objects.filter(
+                document=doc,
+                status__in=(
+                    IngestionJobStatus.QUARANTINED,
+                    IngestionJobStatus.FAILED,
+                    IngestionJobStatus.CANCELED,
+                    IngestionJobStatus.SUCCEEDED,
+                ),
+            )
+            .exclude(source_relpath__isnull=True)
+            .exclude(source_relpath="")
+            .values_list("source_relpath", flat=True)
+        )
+        for relpath in set(relpaths):
+            removed = _remove_storage_file(
+                relpath,
+                os.path.join("uploads", "quarantine"),
+            )
+            if removed:
+                cleaned += 1
+    return cleaned
+
+
 @shared_task(bind=True)
 def cleanup_expired_documents(self) -> int:
     now = timezone.now()
-    expired_docs = Document.objects.filter(expires_at__lt=now)
-    deleted = 0
+    expired_infected_docs = Document.objects.filter(
+        expires_at__lt=now,
+        status=DocumentStatus.INFECTED,
+    )
+    cleaned = 0
+    for doc in expired_infected_docs:
+        if _has_active_jobs(doc):
+            continue
+        cleaned += _cleanup_artifacts_for_document(doc)
+        if doc.storage_relpath_clean:
+            _remove_storage_file(doc.storage_relpath_clean, os.path.join("uploads", "clean"))
+            doc.storage_relpath_clean = None
+            doc.save(update_fields=["storage_relpath_clean"])
+
+    expired_docs = Document.objects.filter(expires_at__lt=now).exclude(
+        status=DocumentStatus.INFECTED
+    )
     for doc in expired_docs:
-        artifacts = Artifact.objects.filter(job__document=doc)
-        for artifact in artifacts:
-            abs_path = artifact.get_storage_path()
-            try:
-                if os.path.exists(abs_path):
-                    os.remove(abs_path)
-            except OSError:
-                pass
-        artifacts.delete()
-        for path in filter(None, [doc.get_quarantine_path(), doc.get_clean_path()]):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError:
-                pass
+        if _has_active_jobs(doc):
+            continue
+        _cleanup_artifacts_for_document(doc)
+        source_relpaths = list(
+            IngestionJob.objects.filter(document=doc)
+            .exclude(source_relpath__isnull=True)
+            .exclude(source_relpath="")
+            .values_list("source_relpath", flat=True)
+        )
+        for relpath in source_relpaths:
+            _remove_storage_file(relpath, os.path.join("uploads", "quarantine"))
+        _remove_storage_file(
+            doc.storage_relpath_quarantine,
+            os.path.join("uploads", "quarantine"),
+        )
+        _remove_storage_file(doc.storage_relpath_clean, os.path.join("uploads", "clean"))
         doc.delete()
-        deleted += 1
-    return deleted
+        cleaned += 1
+    cleaned += _cleanup_infected_quarantine_files(now)
+    return cleaned
 
 
 def _write_bytes_atomic(path: Path, data: bytes) -> None:
@@ -189,6 +290,7 @@ def _write_artifact(job: IngestionJob, kind: str, relpath: str, data: bytes, con
         checksum_sha256=checksum,
         size_bytes=size_bytes,
         content_type=content_type,
+        expires_at=artifact_expires_at(job.tenant),
     )
 
 
@@ -386,7 +488,12 @@ def scan_pdf_task(self, job_id: int) -> int:
 
     status, reason = results.get(abs_path, ("ERROR", "No scan result"))
     if status == "FOUND":
+        _remove_storage_file(document.storage_relpath_clean, os.path.join("uploads", "clean"))
         document.status = DocumentStatus.INFECTED
+        document.infected_at = timezone.now()
+        if job.source_relpath:
+            document.storage_relpath_quarantine = job.source_relpath
+        document.storage_relpath_clean = None
         document.save()
         prev_status = job.status
         prev_stage = job.stage
@@ -411,9 +518,14 @@ def scan_pdf_task(self, job_id: int) -> int:
     clean_abspath = resolve_data_root_path(clean_relpath)
     os.makedirs(os.path.dirname(clean_abspath), exist_ok=True)
     os.replace(abs_path, clean_abspath)
+    _remove_storage_file(
+        document.storage_relpath_quarantine,
+        os.path.join("uploads", "quarantine"),
+    )
 
     document.status = DocumentStatus.CLEAN
     document.storage_relpath_clean = clean_relpath
+    document.infected_at = None
     document.save()
 
     job.scan_ms = int((time.monotonic() - start) * 1000)

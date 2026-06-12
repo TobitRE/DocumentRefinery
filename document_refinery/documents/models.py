@@ -88,6 +88,7 @@ class Document(BaseModel):
     )
     page_count = models.PositiveIntegerField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
+    infected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [

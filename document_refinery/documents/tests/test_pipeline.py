@@ -94,6 +94,9 @@ class TestPipelineTasks(TestCase):
     def test_scan_marks_clean_and_moves_file(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
+            doc.status = "INFECTED"
+            doc.infected_at = timezone.now() - timezone.timedelta(days=30)
+            doc.save(update_fields=["status", "infected_at"])
             abs_path = doc.get_quarantine_path()
 
             with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
@@ -106,6 +109,7 @@ class TestPipelineTasks(TestCase):
             self.assertTrue(doc.storage_relpath_clean)
             self.assertTrue(doc.storage_relpath_clean.endswith(".pdf"))
             self.assertTrue(os.path.exists(doc.get_clean_path()))
+            self.assertIsNone(doc.infected_at)
             self.assertIsNotNone(job.scan_ms)
 
     def test_scan_preserves_office_extension_when_moving_file(self):
@@ -126,9 +130,42 @@ class TestPipelineTasks(TestCase):
             doc.refresh_from_db()
             self.assertTrue(doc.storage_relpath_clean.endswith(".docx"))
 
+    def test_scan_clean_removes_stale_quarantine_original_for_source_copy(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            original_path = doc.get_quarantine_path()
+            source_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "jobs", f"{doc.uuid}.pdf"
+            )
+            source_path = os.path.join(tmpdir, source_relpath)
+            os.makedirs(os.path.dirname(source_path), exist_ok=True)
+            with open(source_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 copied source\n")
+            job.source_relpath = source_relpath
+            job.save(update_fields=["source_relpath"])
+
+            with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
+                mock_scan.return_value = {source_path: ("OK", "")}
+                scan_pdf_task(job.id)
+
+            doc.refresh_from_db()
+            self.assertEqual(doc.status, "CLEAN")
+            self.assertFalse(os.path.exists(original_path))
+            self.assertFalse(os.path.exists(source_path))
+            self.assertTrue(os.path.exists(doc.get_clean_path()))
+
     def test_scan_marks_infected(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
             doc, job = self._make_doc_job(tmpdir)
+            old_infected_at = timezone.now() - timezone.timedelta(days=30)
+            clean_relpath = os.path.join("uploads", "clean", str(self.tenant.id), f"{doc.uuid}.pdf")
+            clean_path = os.path.join(tmpdir, clean_relpath)
+            os.makedirs(os.path.dirname(clean_path), exist_ok=True)
+            with open(clean_path, "wb") as handle:
+                handle.write(b"old clean copy")
+            doc.storage_relpath_clean = clean_relpath
+            doc.infected_at = old_infected_at
+            doc.save(update_fields=["storage_relpath_clean", "infected_at"])
             abs_path = doc.get_quarantine_path()
 
             with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
@@ -139,7 +176,34 @@ class TestPipelineTasks(TestCase):
             doc.refresh_from_db()
             job.refresh_from_db()
             self.assertEqual(doc.status, "INFECTED")
+            self.assertIsNotNone(doc.infected_at)
+            self.assertGreater(doc.infected_at, old_infected_at)
+            self.assertIsNone(doc.storage_relpath_clean)
+            self.assertFalse(os.path.exists(clean_path))
             self.assertEqual(job.status, IngestionJobStatus.QUARANTINED)
+
+    def test_scan_infected_source_copy_becomes_document_quarantine_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
+            doc, job = self._make_doc_job(tmpdir)
+            source_relpath = os.path.join(
+                "uploads", "quarantine", str(self.tenant.id), "jobs", f"{doc.uuid}.pdf"
+            )
+            source_path = os.path.join(tmpdir, source_relpath)
+            os.makedirs(os.path.dirname(source_path), exist_ok=True)
+            with open(source_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 copied source\n")
+            job.source_relpath = source_relpath
+            job.save(update_fields=["source_relpath"])
+
+            with patch("documents.tasks.clamd.ClamdNetworkSocket.scan") as mock_scan:
+                mock_scan.return_value = {source_path: ("FOUND", "Eicar-Test-Signature")}
+                with self.assertRaises(RuntimeError):
+                    scan_pdf_task(job.id)
+
+            doc.refresh_from_db()
+            self.assertEqual(doc.status, "INFECTED")
+            self.assertEqual(doc.storage_relpath_quarantine, source_relpath)
+            self.assertTrue(os.path.exists(doc.get_quarantine_path()))
 
     def test_scan_invalid_response_marks_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(DATA_ROOT=tmpdir):
