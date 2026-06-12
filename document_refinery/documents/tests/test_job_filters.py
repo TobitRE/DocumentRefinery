@@ -57,7 +57,7 @@ class TestJobFilters(TestCase):
 
         response = self.client.get(f"/v1/jobs/?updated_after={since.isoformat()}")
         self.assertEqual(response.status_code, 200)
-        ids = {row["id"] for row in response.data}
+        ids = {row["id"] for row in response.data["results"]}
         self.assertIn(job_new.id, ids)
         self.assertNotIn(job_old.id, ids)
 
@@ -98,7 +98,7 @@ class TestJobFilters(TestCase):
         since_str = naive_since.isoformat(sep=" ")
         response = self.client.get(f"/v1/jobs/?updated_after={since_str}")
         self.assertEqual(response.status_code, 200)
-        ids = {row["id"] for row in response.data}
+        ids = {row["id"] for row in response.data["results"]}
         self.assertIn(job.id, ids)
 
     def test_updated_after_z_suffix(self):
@@ -116,7 +116,7 @@ class TestJobFilters(TestCase):
         since_str = since.replace(microsecond=0).isoformat().replace("+00:00", "Z")
         response = self.client.get(f"/v1/jobs/?updated_after={since_str}")
         self.assertEqual(response.status_code, 200)
-        ids = {row["id"] for row in response.data}
+        ids = {row["id"] for row in response.data["results"]}
         self.assertIn(job.id, ids)
 
     def test_external_uuid_filter(self):
@@ -140,14 +140,15 @@ class TestJobFilters(TestCase):
 
         response = self.client.get(f"/v1/jobs/?external_uuid={external_uuid}")
         self.assertEqual(response.status_code, 200)
-        ids = {row["id"] for row in response.data}
+        ids = {row["id"] for row in response.data["results"]}
         self.assertIn(job_match.id, ids)
         self.assertNotIn(job_other.id, ids)
 
     def test_updated_after_invalid_returns_empty(self):
         response = self.client.get("/v1/jobs/?updated_after=not-a-date")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, [])
+        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(response.data["results"], [])
 
     def test_comparison_id_filter(self):
         comparison_id = uuid.uuid4()
@@ -169,5 +170,5 @@ class TestJobFilters(TestCase):
 
         response = self.client.get(f"/v1/jobs/?comparison_id={comparison_id}")
         self.assertEqual(response.status_code, 200)
-        ids = {row["id"] for row in response.data}
+        ids = {row["id"] for row in response.data["results"]}
         self.assertIn(job_match.id, ids)

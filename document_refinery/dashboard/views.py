@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from authn.permissions import APIKeyRequired, HasScope
 from documents.models import IngestionJob, IngestionJobStatus
@@ -62,6 +63,7 @@ class DashboardSummaryView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes = ["dashboard:read"]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         api_key = request.auth
         jobs = IngestionJob.objects.filter(tenant=api_key.tenant)
@@ -160,6 +162,7 @@ class DashboardWorkersView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes = ["dashboard:read"]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         now = time.time()
         if _WORKER_CACHE["payload"] and now - _WORKER_CACHE["ts"] < _WORKER_CACHE_TTL:
@@ -199,6 +202,7 @@ class UsageReportView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes = ["dashboard:read"]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         api_key = request.auth
         jobs = IngestionJob.objects.filter(tenant=api_key.tenant, duration_ms__isnull=False)
@@ -244,6 +248,7 @@ class DashboardRuntimeView(APIView):
     permission_classes = [APIKeyRequired, HasScope]
     required_scopes = ["dashboard:read"]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         force = request.query_params.get("refresh") in {"1", "true", "yes"}
         return Response(runtime_diagnostics_payload(force_refresh=force))

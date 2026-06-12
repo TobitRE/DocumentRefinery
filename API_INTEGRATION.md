@@ -20,6 +20,14 @@ https://docex.nfx-systems.com/v1/
 Use concrete endpoint paths under `/v1/` (for example `/v1/documents/`, `/v1/jobs/`).
 Do not use `/v1/` itself as an integration health/auth check.
 
+The OpenAPI 3 schema is available at:
+
+```
+GET /v1/schema/
+```
+
+`/v1/schema/` is protected. Use either a valid staff session or any valid API key.
+
 ## Authentication
 
 Use an API key in the `Authorization` header:
@@ -46,6 +54,62 @@ Upload policy per API key:
 - `dashboard:read` — dashboard summary/workers endpoints
 - `webhooks:read` — list/retrieve webhook endpoints
 - `webhooks:write` — create/update/delete webhook endpoints
+
+## Pagination
+
+Breaking change: list endpoints now return a page object instead of a bare JSON
+array. This applies to:
+
+- `GET /v1/documents/`
+- `GET /v1/jobs/`
+- `GET /v1/artifacts/`
+- `GET /v1/webhooks/`
+
+Shape:
+
+```json
+{
+  "count": 123,
+  "next": "https://docex.nfx-systems.com/v1/jobs/?page=2",
+  "previous": null,
+  "results": []
+}
+```
+
+Default page size is 50. Clients may pass `page_size`, capped at 200:
+
+```
+GET /v1/jobs/?status=FAILED&page_size=100
+```
+
+Read records from `results`, not from the top-level response.
+
+## Error format
+
+API errors use a consistent shape:
+
+```json
+{
+  "error_code": "INVALID_OPTIONS",
+  "message": "max_num_pages must be an integer.",
+  "request_id": "b2e4e89d-0c39-4af9-a2e1-0e6f96ad4a9c"
+}
+```
+
+The same ID is returned in the `X-Request-ID` response header. You may send
+`X-Request-ID` on the request to provide your own correlation ID.
+
+Some endpoint-specific errors include extra fields. For example,
+`DUPLICATE_DOCUMENT` still includes duplicate document metadata in addition to
+`error_code`, `message`, and `request_id`.
+
+## Breaking changes
+
+- List responses for documents, jobs, artifacts, and webhooks are now paginated
+  objects. Existing clients that iterate the top-level JSON array must switch to
+  `payload["results"]`.
+- Error responses now consistently include `request_id`. Existing error-code
+  checks should continue to use `payload["error_code"]`.
 
 ## Upload a PDF (async recommended)
 
@@ -178,6 +242,7 @@ payload includes the existing document and latest tenant-local job summary:
 {
   "error_code": "DUPLICATE_DOCUMENT",
   "message": "Document already exists.",
+  "request_id": "b2e4e89d-0c39-4af9-a2e1-0e6f96ad4a9c",
   "duplicate": true,
   "document_id": 123,
   "document_uuid": "7c86f0fd-9de2-41ad-b0df-5ef5d221a35d",
@@ -260,6 +325,8 @@ List artifacts for a job:
 GET /v1/artifacts/?job_id=<job_id>
 ```
 
+This endpoint is paginated. Artifact rows are in `results`.
+
 Download artifact:
 
 ```
@@ -282,6 +349,8 @@ Notes:
 ```
 GET /v1/jobs/
 ```
+
+This endpoint is paginated. Job rows are in `results`.
 
 Filters:
 - `status`
@@ -406,6 +475,8 @@ Use `comparison_id` to fetch all jobs:
 GET /v1/jobs/?comparison_id=<id>
 ```
 
+Read the matching jobs from the paginated response's `results` field.
+
 ## Cancel / retry jobs
 
 Cancel:
@@ -519,6 +590,8 @@ List endpoints:
 GET /v1/webhooks/
 ```
 
+This endpoint is paginated. Webhook endpoint rows are in `results`.
+
 Job update event:
 - `event`: `job.updated`
 - Fired when `status` or `stage` changes.
@@ -565,5 +638,6 @@ most integrators use:
 If you need lower polling overhead, use:
 
 - Webhooks to receive `job.updated` on status or stage changes.
-- `GET /v1/jobs/?updated_after=<timestamp>` to pull only changed jobs.
+- `GET /v1/jobs/?updated_after=<timestamp>` to pull only changed jobs
+  from the paginated `results` field.
 - `external_uuid` to reconcile jobs and documents with your internal IDs.

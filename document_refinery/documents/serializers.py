@@ -116,12 +116,12 @@ class JobSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
-    def get_error_details_json(self, obj):
+    def get_error_details_json(self, obj) -> dict | None:
         if getattr(settings, "API_INCLUDE_ERROR_DETAILS", False):
             return obj.error_details_json
         return None
 
-    def get_options_json(self, obj):
+    def get_options_json(self, obj) -> dict:
         options = obj.options_json if isinstance(obj.options_json, dict) else {}
         sanitized = {}
         for key, value in options.items():

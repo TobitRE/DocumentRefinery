@@ -299,7 +299,8 @@ class TestArtifactAccess(TestCase):
         response = self.client.get("/v1/artifacts/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn("storage_relpath", response.data[0])
+        self.assertEqual(response.data["count"], 1)
+        self.assertNotIn("storage_relpath", response.data["results"][0])
 
     def test_artifact_download_and_preview_reject_path_traversal_relpath(self):
         with tempfile.TemporaryDirectory() as tmpdir:

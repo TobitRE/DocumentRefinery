@@ -1,5 +1,6 @@
 Django>=5.2.14,<5.3
 djangorestframework
+drf-spectacular
 django-environ
 django-filter
 django-cors-headers

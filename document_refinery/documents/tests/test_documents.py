@@ -623,7 +623,8 @@ class TestDocumentScope(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.raw_key_b}")
         response = self.client.get("/v1/documents/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 0)
+        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(response.data["results"], [])
 
 
 class TestDocumentCompare(TestCase):

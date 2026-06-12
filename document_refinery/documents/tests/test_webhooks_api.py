@@ -75,7 +75,7 @@ class TestWebhookEndpointAPI(TestCase):
 
         response = self.client.get("/v1/webhooks/")
         self.assertEqual(response.status_code, 200)
-        ids = {row["id"] for row in response.data}
+        ids = {row["id"] for row in response.data["results"]}
         self.assertIn(endpoint_id, ids)
 
         response = self.client.get(f"/v1/webhooks/{endpoint_id}/")
@@ -121,7 +121,8 @@ class TestWebhookEndpointAPI(TestCase):
         self._auth(self.raw_key_other)
         response = self.client.get("/v1/webhooks/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, [])
+        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(response.data["results"], [])
 
     def test_webhook_rejects_private_host(self):
         self._auth(self.raw_key)
@@ -131,4 +132,6 @@ class TestWebhookEndpointAPI(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("url", response.data)
+        self.assertEqual(response.data["error_code"], "VALIDATION_ERROR")
+        self.assertIn("url", response.data["message"])
+        self.assertIn("request_id", response.data)
