@@ -83,6 +83,69 @@ class TestDoclingOptions(TestCase):
             {"do_picture_description": False, "do_picture_classification": False}
         )
 
+    def test_validates_chunking_options(self):
+        validate_docling_options(
+            {
+                "chunks_format": "hybrid",
+                "chunking": {"tokenizer": "simple", "max_tokens": 256},
+            }
+        )
+        with override_settings(
+            DOCLING_ALLOWED_CHUNK_TOKENIZERS="sentence-transformers/all-MiniLM-L6-v2"
+        ):
+            validate_docling_options(
+                {
+                    "chunking": {
+                        "tokenizer": {
+                            "kind": "huggingface",
+                            "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+                            "local_files_only": True,
+                            "trust_remote_code": False,
+                        },
+                        "max_tokens": 512,
+                        "merge_peers": False,
+                    }
+                }
+            )
+
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"chunks_format": "legacy"})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"chunking": "small"})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"chunking": {"max_tokens": 0}})
+        with self.assertRaises(ValidationError):
+            validate_docling_options({"chunking": {"tokenizer": ""}})
+        with self.assertRaises(ValidationError):
+            validate_docling_options(
+                {"chunking": {"tokenizer": {"kind": "huggingface"}}}
+            )
+        with self.assertRaises(ValidationError):
+            validate_docling_options(
+                {
+                    "chunking": {
+                        "tokenizer": {
+                            "kind": "huggingface",
+                            "model_name": "attacker/tokenizer",
+                            "trust_remote_code": True,
+                        }
+                    }
+                }
+            )
+        with override_settings(DOCLING_ALLOWED_CHUNK_TOKENIZERS="allowed/tokenizer"):
+            with self.assertRaises(ValidationError):
+                validate_docling_options(
+                    {
+                        "chunking": {
+                            "tokenizer": {
+                                "kind": "huggingface",
+                                "model_name": "allowed/tokenizer",
+                                "local_files_only": False,
+                            }
+                        }
+                    }
+                )
+
     def test_preserves_unknown_json_fallback_keys(self):
         validate_docling_options({"custom_future_key": {"enabled": True}})
 
